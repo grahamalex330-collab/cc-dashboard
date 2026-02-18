@@ -24,6 +24,7 @@ const GLOSSARY = {
   assignmentRisk: "How likely your call is to be assigned. Based on how close the stock price is to your strike. ITM = very high risk. Within 2% = high. 2-5% = moderate. 5%+ = low.",
   capitalUtilization: "What percentage of your stock positions currently have calls written against them. Higher = more income generation. 100% means every position is covered.",
   concentration: "How much of your total portfolio is in a single stock. Over 40% in one name increases your risk if that stock drops significantly.",
+  volumeVsAvg: "Trading volume compared to the stock's average daily volume. Values above 1.5x suggest unusual activity — often driven by news, earnings, or institutional interest — which typically means better options liquidity and premiums.",
 };
 
 const Tip = ({ term, children }) => {
@@ -382,27 +383,44 @@ export default function CoveredCallDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 2000,
-          system: `You are a financial screener assistant. Search for US stocks with the highest implied volatility that are good candidates for covered call writing. Apply these filters:
-- US-listed equities only (no ADRs)
-- Market cap above $2 billion (no small caps)
-- IV Rank above 50
-- Stock price above $10
-- Must have liquid weekly options (tight bid-ask spreads, high open interest)
-- Flag if earnings are within 7 days
+          max_tokens: 3000,
+          system: `You are a covered call analyst assistant. Search the web to find US stocks that are currently attractive for selling covered calls. Focus on stocks with high options activity, recent price momentum, and upcoming catalysts.
 
-Return ONLY a raw JSON array of exactly 10 stocks, sorted by IV rank descending. No markdown, no backticks, no explanation. Format:
-[{"ticker":"XXX","sector":"Technology","ivRank":85,"currentIV":92.5,"price":45.20,"marketCap":"12B","earningsFlag":false,"earningsNote":""},...]
-earningsFlag should be true if earnings are within 7 days, and earningsNote should say the date if so.
+Look for:
+- Stocks with unusually high options volume or appearing on "most active options" lists
+- Stocks with significant recent price moves (up or down 10%+ in last 30 days)
+- Stocks with upcoming earnings or other catalysts
+- Stocks near their 52-week highs (good call premium)
+- Popular large-cap and mid-cap names with liquid weekly options
+
+For each stock, gather:
+- ticker: Stock symbol
+- sector: Industry sector
+- price: Current or most recent stock price
+- marketCap: Approximate market cap (e.g. "45B")
+- volumeVsAvg: Recent trading volume compared to average (e.g. "2.3x" or "1.1x" or "High" if exact number unavailable)
+- move30d: Approximate percentage price change over last 30 days (e.g. "+15%" or "-8%")
+- near52wHigh: true/false whether the stock is within 10% of its 52-week high
+- nextEarnings: Next earnings date if known (e.g. "Feb 25" or "Mar 3"), otherwise ""
+- catalyst: Brief note on any recent news, upgrades, or events driving activity
+- why: One sentence summary of why this stock is interesting for covered calls right now
+
+Return ONLY a raw JSON array of exactly 10 stocks. No markdown, no backticks, no explanation.
+Format: [{"ticker":"XXX","sector":"Technology","price":45.20,"marketCap":"12B","volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","catalyst":"Beat Q4 earnings, raised guidance","why":"High options volume with stock near 52w high after strong earnings beat"},...]
 Your entire response must be parseable JSON array and nothing else.`,
           messages: [
-            { role: "user", content: `Search for the top 10 US stocks with highest IV rank right now that are good for selling covered calls. They should have liquid weekly options, market cap over $2B, stock price over $10, and IV rank over 50.${excludeNote} Today's date is ${new Date().toLocaleDateString()}.` }
+            { role: "user", content: `Search for 10 US stocks that are currently the best candidates for selling covered calls. Look for stocks with high options activity, big recent price moves, upcoming earnings, or other catalysts that create premium opportunities. They should have market cap over $2B, stock price over $10, and liquid options.${excludeNote} Today's date is ${new Date().toLocaleDateString()}.` }
           ],
           tools: [{ type: "web_search_20250305", name: "web_search" }],
         }),
       });
       const result = await response.json();
-      const text = result.content
+      if (!response.ok) {
+        console.error("Scanner API error:", result);
+        setScannerLoading(false);
+        return;
+      }
+      const text = (result.content || [])
         .map((item) => (item.type === "text" ? item.text : ""))
         .filter(Boolean)
         .join("\n");
@@ -1114,7 +1132,7 @@ Your entire response must be parseable JSON array and nothing else.`,
                 <div className="flex items-center gap-2">
                   <Zap size={18} className="text-amber-500" />
                   <h2 className="text-lg font-semibold text-gray-900">CC Opportunities</h2>
-                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Top 10 by IV Rank</span>
+                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Top 10 by Activity & Momentum</span>
                 </div>
                 <div className="flex items-center gap-3">
                   {scannerTimestamp && (
@@ -1150,54 +1168,67 @@ Your entire response must be parseable JSON array and nothing else.`,
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
-                          <th className="px-5 py-3">Ticker</th>
-                          <th className="px-5 py-3">Sector</th>
-                          <th className="px-5 py-3">Price</th>
-                          <th className="px-5 py-3">Mkt Cap</th>
-                          <th className="px-5 py-3"><Tip term="ivRank">IV Rank (%)</Tip></th>
-                          <th className="px-5 py-3"><Tip term="currentIV">Current IV (%)</Tip></th>
-                          <th className="px-5 py-3">IV Level</th>
-                          <th className="px-5 py-3">Earnings</th>
-                          <th className="px-5 py-3"></th>
+                          <th className="px-4 py-3">Ticker</th>
+                          <th className="px-4 py-3">Sector</th>
+                          <th className="px-4 py-3">Price</th>
+                          <th className="px-4 py-3">Mkt Cap</th>
+                          <th className="px-4 py-3"><Tip term="volumeVsAvg">Vol vs Avg</Tip></th>
+                          <th className="px-4 py-3">30d Move</th>
+                          <th className="px-4 py-3">Near 52w High</th>
+                          <th className="px-4 py-3">Earnings</th>
+                          <th className="px-4 py-3">Why</th>
+                          <th className="px-4 py-3"></th>
                         </tr>
                       </thead>
                       <tbody>
                         {scannerData.map((s, idx) => {
-                          const ivLevel = (s.currentIV || 0) >= 60 ? "High" : (s.currentIV || 0) >= 35 ? "Medium" : "Low";
-                          const ivLevelColors = { High: "bg-green-100 text-green-800", Medium: "bg-yellow-100 text-yellow-800", Low: "bg-red-100 text-red-700" };
-                          const alreadyOnWatchlist = data.watchlist.some(w => w.ticker.toUpperCase() === s.ticker.toUpperCase());
+                          const alreadyOnWatchlist = data.watchlist.some(w => w.ticker.toUpperCase() === (s.ticker || "").toUpperCase());
+                          const move = String(s.move30d || "");
+                          const movePositive = move.startsWith("+");
+                          const moveNegative = move.startsWith("-");
                           return (
-                            <tr key={s.ticker + idx} className={`border-b border-gray-50 hover:bg-gray-50 ${scannerLoading ? "opacity-50" : ""}`}>
-                              <td className="px-5 py-3 font-bold text-gray-900">{s.ticker}</td>
-                              <td className="px-5 py-3 text-gray-600">{s.sector || "—"}</td>
-                              <td className="px-5 py-3">{s.price ? formatCurrency(s.price) : "—"}</td>
-                              <td className="px-5 py-3 text-gray-500">{s.marketCap || "—"}</td>
-                              <td className="px-5 py-3">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-16 h-2 bg-gray-100 rounded-full overflow-hidden">
-                                    <div
-                                      className={`h-full rounded-full ${(s.ivRank || 0) >= 50 ? "bg-green-500" : (s.ivRank || 0) >= 30 ? "bg-yellow-500" : "bg-red-400"}`}
-                                      style={{ width: `${Math.min(100, s.ivRank || 0)}%` }}
-                                    />
-                                  </div>
-                                  <span className="font-medium">{s.ivRank || "—"}</span>
-                                </div>
+                            <tr key={(s.ticker || "") + idx} className={`border-b border-gray-50 hover:bg-gray-50 ${scannerLoading ? "opacity-50" : ""}`}>
+                              <td className="px-4 py-3 font-bold text-gray-900">{s.ticker || "—"}</td>
+                              <td className="px-4 py-3 text-gray-600">{s.sector || "—"}</td>
+                              <td className="px-4 py-3">{s.price ? formatCurrency(s.price) : "—"}</td>
+                              <td className="px-4 py-3 text-gray-500">{s.marketCap || "—"}</td>
+                              <td className="px-4 py-3">
+                                {s.volumeVsAvg ? (
+                                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                                    String(s.volumeVsAvg).replace("x","") >= 2 ? "bg-green-100 text-green-800" :
+                                    String(s.volumeVsAvg).replace("x","") >= 1.3 ? "bg-yellow-100 text-yellow-800" :
+                                    "bg-gray-100 text-gray-600"
+                                  }`}>{s.volumeVsAvg}</span>
+                                ) : "—"}
                               </td>
-                              <td className="px-5 py-3">{s.currentIV || "—"}%</td>
-                              <td className="px-5 py-3">
-                                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ivLevelColors[ivLevel]}`}>{ivLevel}</span>
+                              <td className="px-4 py-3">
+                                <span className={`font-medium ${movePositive ? "text-green-700" : moveNegative ? "text-red-600" : "text-gray-600"}`}>
+                                  {move || "—"}
+                                </span>
                               </td>
-                              <td className="px-5 py-3">
-                                {s.earningsFlag ? (
+                              <td className="px-4 py-3">
+                                {s.near52wHigh ? (
+                                  <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
+                                    <TrendingUp size={12} /> Near High
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-400 text-xs">No</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3">
+                                {s.nextEarnings ? (
                                   <span className="inline-flex items-center gap-1 text-xs font-medium text-orange-700 bg-orange-50 px-2 py-0.5 rounded-full">
                                     <AlertTriangle size={12} />
-                                    {s.earningsNote || "Within 7d"}
+                                    {s.nextEarnings}
                                   </span>
                                 ) : (
                                   <span className="text-gray-400 text-xs">—</span>
                                 )}
                               </td>
-                              <td className="px-5 py-3">
+                              <td className="px-4 py-3 text-xs text-gray-600 max-w-[220px]">
+                                {s.why || s.catalyst || "—"}
+                              </td>
+                              <td className="px-4 py-3">
                                 {alreadyOnWatchlist ? (
                                   <span className="text-xs text-gray-400 flex items-center gap-1"><Check size={12} /> Added</span>
                                 ) : (
@@ -1205,8 +1236,8 @@ Your entire response must be parseable JSON array and nothing else.`,
                                     addWatchlistItem({
                                       ticker: s.ticker,
                                       sector: s.sector || "",
-                                      ivRank: s.ivRank || 0,
-                                      currentIV: s.currentIV || 0,
+                                      price: s.price || 0,
+                                      move30d: s.move30d || "",
                                       dateAdded: today(),
                                     });
                                   }}>
@@ -1223,7 +1254,7 @@ Your entire response must be parseable JSON array and nothing else.`,
                 </div>
                 {scannerData && (
                   <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 rounded-b-xl">
-                    <p className="text-xs text-gray-400">Filters: US equities · Market cap &gt; $2B · IV Rank &gt; 50 · Stock price &gt; $10 · Liquid weekly options · Sorted by IV Rank desc</p>
+                    <p className="text-xs text-gray-400">Filters: US equities · Market cap &gt; $2B · Stock price &gt; $10 · Liquid weekly options · Sorted by activity &amp; momentum</p>
                   </div>
                 )}
               </Card>
