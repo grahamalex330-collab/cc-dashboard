@@ -213,6 +213,7 @@ export default function CoveredCallDashboard() {
   const [pricesLoading, setPricesLoading] = useState(false);
   const [pricesTimestamp, setPricesTimestamp] = useState(null);
   const [syncStatus, setSyncStatus] = useState(null); // "saving" | "saved" | "error"
+  const [showImport, setShowImport] = useState(false);
 
   const fetchLivePrices = useCallback(async () => {
     const tickers = [...new Set(data.calls.filter(c => c.status === "open").map(c => c.ticker))];
@@ -644,6 +645,8 @@ Your entire response must be parseable JSON array and nothing else.`,
                 {syncStatus === "saving" && <span className="text-yellow-600">Saving...</span>}
                 {syncStatus === "saved" && <span className="text-green-600">✓ Saved</span>}
                 {syncStatus === "error" && <span className="text-red-600">Save failed</span>}
+                <button onClick={() => { const json = JSON.stringify(data, null, 2); navigator.clipboard.writeText(json); setSyncStatus("saved"); setTimeout(() => setSyncStatus(null), 2000); }} className="text-gray-400 hover:text-gray-600" title="Export data">↗</button>
+                <button onClick={() => setShowImport(true)} className="text-gray-400 hover:text-gray-600" title="Import data">↙</button>
                 <button onClick={handleLeave} className="text-gray-400 hover:text-gray-600 ml-1" title="Switch household">
                   <X size={14} />
                 </button>
@@ -1659,6 +1662,11 @@ Your entire response must be parseable JSON array and nothing else.`,
       <Modal open={showAddWatchlist} onClose={() => setShowAddWatchlist(false)} title="Add to Watchlist">
         <AddWatchlistForm onSubmit={(w) => { addWatchlistItem(w); setShowAddWatchlist(false); }} />
       </Modal>
+
+      {/* Import Data Modal */}
+      <Modal open={showImport} onClose={() => setShowImport(false)} title="Import Data">
+        <ImportDataForm onSubmit={(imported) => { save(imported); setShowImport(false); }} />
+      </Modal>
     </div>
   );
 }
@@ -2615,6 +2623,66 @@ function AddEventForm({ onSubmit }) {
         <Field label="Description"><Input value={form.description} onChange={(e) => set("description", e.target.value)} placeholder="Describe the event" /></Field>
       )}
       <Btn className="w-full" disabled={!form.ticker || !form.date} onClick={() => onSubmit(form)}>Add Event</Btn>
+    </div>
+  );
+}
+
+function ImportDataForm({ onSubmit }) {
+  const [raw, setRaw] = useState("");
+  const [error, setError] = useState(null);
+  const [preview, setPreview] = useState(null);
+
+  const handleParse = (text) => {
+    setRaw(text);
+    setError(null);
+    setPreview(null);
+    if (!text.trim()) return;
+    try {
+      const parsed = JSON.parse(text.trim());
+      if (!parsed.positions && !parsed.calls) {
+        setError("Doesn't look like dashboard data — missing positions or calls.");
+        return;
+      }
+      setPreview({
+        positions: (parsed.positions || []).length,
+        calls: (parsed.calls || []).length,
+        watchlist: (parsed.watchlist || []).length,
+        events: (parsed.events || []).length,
+      });
+    } catch {
+      setError("Invalid JSON. Make sure you copied the full export.");
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
+        Paste your exported dashboard data below. This will replace all current data.
+      </div>
+      <textarea
+        value={raw}
+        onChange={(e) => handleParse(e.target.value)}
+        placeholder='Paste exported JSON here...'
+        className="w-full h-40 px-3 py-2 text-xs font-mono border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
+      />
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      {preview && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-xs text-green-800">
+          Found: {preview.positions} positions, {preview.calls} trades, {preview.watchlist} watchlist items, {preview.events} events
+        </div>
+      )}
+      <Btn
+        className="w-full"
+        disabled={!preview}
+        onClick={() => {
+          try {
+            const parsed = JSON.parse(raw.trim());
+            onSubmit(parsed);
+          } catch {}
+        }}
+      >
+        Import & Replace Data
+      </Btn>
     </div>
   );
 }
