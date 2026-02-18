@@ -226,7 +226,7 @@ export default function CoveredCallDashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5-20250514",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 500,
           system: `You are a stock price lookup assistant. Search for current or most recent closing prices for the given tickers. Return ONLY a raw JSON object mapping ticker to price. No markdown, no backticks, no explanation. Format: {"AAPL": 185.50, "PLTR": 78.20} Your entire response must be parseable JSON and nothing else.`,
           messages: [
@@ -381,7 +381,7 @@ export default function CoveredCallDashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5-20250514",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 2000,
           system: `You are a financial screener assistant. Search for US stocks with the highest implied volatility that are good candidates for covered call writing. Apply these filters:
 - US-listed equities only (no ADRs)
@@ -2200,7 +2200,7 @@ function WriteCallForm({ positions, events, defaultTicker, onSubmit }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5-20250514",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 300,
           system: `You are a stock price lookup assistant. Search for the current or most recent closing price of the given stock ticker. Return ONLY a raw JSON object with no markdown, no backticks, no explanation. Format: {"price": <number>, "source": "<description like 'Current price' or 'Previous close'>"} Your entire response must be parseable JSON and nothing else.`,
           messages: [
@@ -2710,7 +2710,7 @@ function AddWatchlistForm({ onSubmit }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5-20250514",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 1000,
           system: `You are a financial data assistant. When given a stock ticker, search for its current implied volatility (IV) data for options and its sector. After searching, you MUST respond with ONLY a raw JSON object — no markdown, no backticks, no explanation, no preamble, no text before or after. The JSON format is: {"ivRank": <number 0-100>, "currentIV": <number as percentage e.g. 85.2>, "sector": "<GICS sector e.g. Technology, Financials, Healthcare, Consumer Discretionary, Energy, etc.>"}. If exact IV data isn't available, estimate based on recent volatility. Your entire response must be parseable JSON and nothing else.`,
           messages: [
