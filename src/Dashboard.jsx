@@ -25,6 +25,9 @@ const GLOSSARY = {
   capitalUtilization: "What percentage of your stock positions currently have calls written against them. Higher = more income generation. 100% means every position is covered.",
   concentration: "How much of your total portfolio is in a single stock. Over 40% in one name increases your risk if that stock drops significantly.",
   volumeVsAvg: "Trading volume compared to the stock's average daily volume. Values above 1.5x suggest unusual activity — often driven by news, earnings, or institutional interest — which typically means better options liquidity and premiums.",
+  volScore: "Volatility Score (0-100) — a composite measure of how attractive a stock is for selling covered calls. Based on: 52-week price range (25 pts), 30-day momentum (20 pts), beta (20 pts), upcoming catalysts like earnings (20 pts), and unusual volume (15 pts). Higher = fatter premiums likely.",
+  beta: "Beta measures how much a stock moves relative to the S&P 500. Beta of 1.0 = moves with the market. Above 1.5 = significantly more volatile (better CC premiums). Below 0.8 = relatively stable.",
+  range52w: "The stock's 52-week price range expressed as a percentage of current price. A wider range indicates higher historical volatility. Stocks with 50%+ range tend to have richer option premiums.",
 };
 
 const Tip = ({ term, children }) => {
@@ -211,6 +214,7 @@ export default function CoveredCallDashboard() {
   const [scannerLoading, setScannerLoading] = useState(false);
   const [scannerTimestamp, setScannerTimestamp] = useState(null);
   const [scannerError, setScannerError] = useState(null);
+  const [watchlistScoresLoading, setWatchlistScoresLoading] = useState(false);
   const [livePrices, setLivePrices] = useState({});
   const [pricesLoading, setPricesLoading] = useState(false);
   const [pricesTimestamp, setPricesTimestamp] = useState(null);
@@ -439,6 +443,72 @@ Your entire response must be parseable JSON and nothing else.`,
     }
     setScannerLoading(false);
   }, [data.watchlist, data.positions]);
+
+  const fetchWatchlistScores = useCallback(async () => {
+    const tickers = data.watchlist.map(w => w.ticker.toUpperCase());
+    if (tickers.length === 0) return;
+    setWatchlistScoresLoading(true);
+    try {
+      const response = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 3000,
+          system: `You are a volatility analyst. For each stock ticker given, search for key volatility data and compute a Volatility Score (0-100) for covered call attractiveness.
+
+Score components:
+- Range (25 pts): (52wHigh - 52wLow) / currentPrice — wider range = more volatile = higher score
+- Momentum (20 pts): absolute 30-day price move — bigger recent swings = higher
+- Beta (20 pts): beta > 1.5 = full points, 1.0-1.5 = partial, < 1.0 = low
+- Catalyst (20 pts): earnings within 14 days = high, recent major news = moderate
+- Volume (15 pts): unusual volume vs average — 2x+ = full, 1.3x+ = partial
+
+Return ONLY a JSON object mapping ticker to data. No markdown, no backticks, no explanation. Format:
+{"AAPL":{"sector":"Technology","price":185.5,"volScore":62,"beta":1.21,"move30d":"+8%","range52w":"32%","volumeVsAvg":"1.4x","nextEarnings":"Apr 24","why":"Moderate vol with earnings approaching"},"TSLA":{...}}
+Your entire response must be parseable JSON and nothing else.`,
+          messages: [
+            { role: "user", content: `Analyze these stocks for covered call volatility scoring: ${tickers.join(", ")}. Today is ${new Date().toLocaleDateString()}.` }
+          ],
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error("Watchlist scores API error:", result);
+        setWatchlistScoresLoading(false);
+        return;
+      }
+      const text = (result.content || []).map(item => item.type === "text" ? item.text : "").filter(Boolean).join("\n");
+      const clean = text.replace(/```json|```/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(clean); } catch {
+        const jsonMatch = clean.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      }
+      if (parsed && typeof parsed === "object") {
+        const updated = data.watchlist.map(w => {
+          const d = parsed[w.ticker.toUpperCase()];
+          if (!d) return w;
+          return {
+            ...w,
+            sector: d.sector || w.sector,
+            price: d.price || w.price,
+            volScore: d.volScore || 0,
+            beta: d.beta || 0,
+            move30d: d.move30d || "",
+            range52w: d.range52w || "",
+            volumeVsAvg: d.volumeVsAvg || "",
+            nextEarnings: d.nextEarnings || "",
+            why: d.why || "",
+            dateScored: today(),
+          };
+        });
+        setData(prev => ({ ...prev, watchlist: updated }));
+      }
+    } catch (err) { console.error("Watchlist scores error:", err); }
+    setWatchlistScoresLoading(false);
+  }, [data.watchlist]);
 
   const nextId = () => {
     const id = data.nextId;
@@ -1053,8 +1123,16 @@ Your entire response must be parseable JSON and nothing else.`,
         {tab === "Watchlist" && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-gray-900">IV Watchlist</h2>
-              <Btn onClick={() => setShowAddWatchlist(true)}><Plus size={14} /> Add to Watchlist</Btn>
+              <h2 className="text-lg font-semibold text-gray-900">Volatility Watchlist</h2>
+              <div className="flex items-center gap-2">
+                {data.watchlist.length > 0 && (
+                  <Btn variant="secondary" size="sm" onClick={fetchWatchlistScores} disabled={watchlistScoresLoading}>
+                    <RefreshCw size={14} className={watchlistScoresLoading ? "animate-spin" : ""} />
+                    {watchlistScoresLoading ? "Scoring..." : "Refresh Scores"}
+                  </Btn>
+                )}
+                <Btn onClick={() => setShowAddWatchlist(true)}><Plus size={14} /> Add Ticker</Btn>
+              </div>
             </div>
             <Card>
               <div className="overflow-x-auto">
@@ -1064,45 +1142,77 @@ Your entire response must be parseable JSON and nothing else.`,
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
-                        <th className="px-5 py-3">Ticker</th>
-                        <th className="px-5 py-3">Sector</th>
-                        <th className="px-5 py-3"><Tip term="ivRank">IV Rank (%)</Tip></th>
-                        <th className="px-5 py-3"><Tip term="currentIV">Current IV (%)</Tip></th>
-                        <th className="px-5 py-3">IV Level</th>
-                        <th className="px-5 py-3">Date Added</th>
-                        <th className="px-5 py-3">In Portfolio</th>
-                        <th className="px-5 py-3"></th>
+                        <th className="px-4 py-3">Ticker</th>
+                        <th className="px-4 py-3">Sector</th>
+                        <th className="px-4 py-3">Price</th>
+                        <th className="px-4 py-3"><Tip term="volScore">Vol Score</Tip></th>
+                        <th className="px-4 py-3"><Tip term="beta">Beta</Tip></th>
+                        <th className="px-4 py-3">30d Move</th>
+                        <th className="px-4 py-3"><Tip term="range52w">52w Range</Tip></th>
+                        <th className="px-4 py-3"><Tip term="volumeVsAvg">Vol vs Avg</Tip></th>
+                        <th className="px-4 py-3">Earnings</th>
+                        <th className="px-4 py-3">In Portfolio</th>
+                        <th className="px-4 py-3"></th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.watchlist.map((w) => {
                         const inPortfolio = activePositions.some((p) => p.ticker.toUpperCase() === w.ticker.toUpperCase());
-                        const ivLevel = w.currentIV >= 60 ? "High" : w.currentIV >= 35 ? "Medium" : "Low";
-                        const ivLevelColors = { High: "bg-green-100 text-green-800", Medium: "bg-yellow-100 text-yellow-800", Low: "bg-red-100 text-red-700" };
+                        const move = String(w.move30d || "");
+                        const movePositive = move.startsWith("+");
+                        const moveNegative = move.startsWith("-");
+                        const vs = w.volScore || 0;
+                        const vsColor = vs >= 70 ? "bg-green-500" : vs >= 45 ? "bg-yellow-500" : "bg-red-400";
+                        const vsLabel = vs >= 70 ? "High" : vs >= 45 ? "Moderate" : "Low";
+                        const vsLabelColor = vs >= 70 ? "text-green-700" : vs >= 45 ? "text-yellow-700" : "text-red-600";
                         return (
-                          <tr key={w.id} className="border-b border-gray-50 hover:bg-gray-50">
-                            <td className="px-5 py-3 font-bold text-gray-900">{w.ticker}</td>
-                            <td className="px-5 py-3 text-gray-600">{w.sector || "—"}</td>
-                            <td className="px-5 py-3">
-                              <div className="flex items-center gap-2">
-                                <div className="w-16 h-2 bg-gray-100 rounded-full overflow-hidden">
-                                  <div
-                                    className={`h-full rounded-full ${w.ivRank >= 50 ? "bg-green-500" : w.ivRank >= 30 ? "bg-yellow-500" : "bg-red-400"}`}
-                                    style={{ width: `${Math.min(100, w.ivRank || 0)}%` }}
-                                  />
+                          <tr key={w.id} className={`border-b border-gray-50 hover:bg-gray-50 ${watchlistScoresLoading ? "opacity-50" : ""}`}>
+                            <td className="px-4 py-3 font-bold text-gray-900">{w.ticker}</td>
+                            <td className="px-4 py-3 text-gray-600">{w.sector || "—"}</td>
+                            <td className="px-4 py-3">{w.price ? formatCurrency(w.price) : "—"}</td>
+                            <td className="px-4 py-3">
+                              {vs > 0 ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-14 h-2 bg-gray-100 rounded-full overflow-hidden">
+                                    <div className={`h-full rounded-full ${vsColor}`} style={{ width: `${Math.min(100, vs)}%` }} />
+                                  </div>
+                                  <span className="font-semibold text-xs">{vs}</span>
+                                  <span className={`text-xs font-medium ${vsLabelColor}`}>{vsLabel}</span>
                                 </div>
-                                <span className="font-medium">{w.ivRank || "—"}</span>
-                              </div>
+                              ) : <span className="text-gray-400 text-xs">—</span>}
                             </td>
-                            <td className="px-5 py-3">{w.currentIV || "—"}%</td>
-                            <td className="px-5 py-3">
-                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ivLevelColors[ivLevel]}`}>{ivLevel}</span>
+                            <td className="px-4 py-3">
+                              {w.beta ? (
+                                <span className={`font-medium ${w.beta >= 1.5 ? "text-orange-600" : w.beta >= 1.0 ? "text-gray-900" : "text-blue-600"}`}>{w.beta}</span>
+                              ) : "—"}
                             </td>
-                            <td className="px-5 py-3 text-gray-500">{w.dateAdded}</td>
-                            <td className="px-5 py-3">
+                            <td className="px-4 py-3">
+                              <span className={`font-medium ${movePositive ? "text-green-700" : moveNegative ? "text-red-600" : "text-gray-600"}`}>
+                                {move || "—"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">{w.range52w || "—"}</td>
+                            <td className="px-4 py-3">
+                              {w.volumeVsAvg ? (
+                                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                                  String(w.volumeVsAvg).replace("x","") >= 2 ? "bg-green-100 text-green-800" :
+                                  String(w.volumeVsAvg).replace("x","") >= 1.3 ? "bg-yellow-100 text-yellow-800" :
+                                  "bg-gray-100 text-gray-600"
+                                }`}>{w.volumeVsAvg}</span>
+                              ) : "—"}
+                            </td>
+                            <td className="px-4 py-3">
+                              {w.nextEarnings ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-medium text-orange-700 bg-orange-50 px-2 py-0.5 rounded-full">
+                                  <AlertTriangle size={12} />
+                                  {w.nextEarnings}
+                                </span>
+                              ) : <span className="text-gray-400 text-xs">—</span>}
+                            </td>
+                            <td className="px-4 py-3">
                               {inPortfolio ? <span className="text-green-700 font-medium flex items-center gap-1"><Check size={14} /> Yes</span> : <span className="text-gray-400">No</span>}
                             </td>
-                            <td className="px-5 py-3">
+                            <td className="px-4 py-3">
                               <button onClick={() => removeWatchlistItem(w.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button>
                             </td>
                           </tr>
@@ -1112,6 +1222,11 @@ Your entire response must be parseable JSON and nothing else.`,
                   </table>
                 )}
               </div>
+              {data.watchlist.some(w => w.volScore > 0) && (
+                <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 rounded-b-xl">
+                  <p className="text-xs text-gray-400">Vol Score (0-100) based on: 52w range, beta, 30d momentum, volume activity, and earnings proximity</p>
+                </div>
+              )}
             </Card>
 
             {/* CC Opportunities Scanner */}
@@ -1235,6 +1350,10 @@ Your entire response must be parseable JSON and nothing else.`,
                                       sector: s.sector || "",
                                       price: s.price || 0,
                                       move30d: s.move30d || "",
+                                      volumeVsAvg: s.volumeVsAvg || "",
+                                      near52wHigh: s.near52wHigh || false,
+                                      nextEarnings: s.nextEarnings || "",
+                                      why: s.why || "",
                                       dateAdded: today(),
                                     });
                                   }}>
@@ -1694,7 +1813,7 @@ Your entire response must be parseable JSON and nothing else.`,
       </Modal>
 
       {/* Add Watchlist Modal */}
-      <Modal open={showAddWatchlist} onClose={() => setShowAddWatchlist(false)} title="Add to Watchlist">
+      <Modal open={showAddWatchlist} onClose={() => setShowAddWatchlist(false)} title="Add to Watchlist — Volatility Analysis">
         <AddWatchlistForm onSubmit={(w) => { addWatchlistItem(w); setShowAddWatchlist(false); }} />
       </Modal>
 
@@ -2728,7 +2847,7 @@ function AddWatchlistForm({ onSubmit }) {
   const [error, setError] = useState("");
   const [preview, setPreview] = useState(null);
 
-  const fetchIVData = async () => {
+  const fetchVolData = async () => {
     if (!ticker.trim()) return;
     setLoading(true);
     setError("");
@@ -2740,62 +2859,81 @@ function AddWatchlistForm({ onSubmit }) {
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
           max_tokens: 1000,
-          system: `You are a financial data assistant. When given a stock ticker, search for its current implied volatility (IV) data for options and its sector. After searching, you MUST respond with ONLY a raw JSON object — no markdown, no backticks, no explanation, no preamble, no text before or after. The JSON format is: {"ivRank": <number 0-100>, "currentIV": <number as percentage e.g. 85.2>, "sector": "<GICS sector e.g. Technology, Financials, Healthcare, Consumer Discretionary, Energy, etc.>"}. If exact IV data isn't available, estimate based on recent volatility. Your entire response must be parseable JSON and nothing else.`,
+          system: `You are a volatility analyst. For the given stock, search for key data and compute a Volatility Score (0-100) for covered call attractiveness.
+
+Score components:
+- Range (25 pts): (52wHigh - 52wLow) / currentPrice — wider = higher
+- Momentum (20 pts): absolute 30-day move — bigger = higher
+- Beta (20 pts): >1.5 = full, 1.0-1.5 = partial, <1.0 = low
+- Catalyst (20 pts): earnings within 14 days = high, major news = moderate
+- Volume (15 pts): volume vs average — 2x+ = full, 1.3x+ = partial
+
+Return ONLY a raw JSON object. No markdown, no backticks. Format:
+{"sector":"Technology","price":185.5,"volScore":62,"beta":1.21,"move30d":"+8%","range52w":"32%","volumeVsAvg":"1.4x","nextEarnings":"Apr 24","why":"Moderate vol with earnings approaching"}
+Your entire response must be parseable JSON and nothing else.`,
           messages: [
-            { role: "user", content: `Look up current options implied volatility data and the GICS sector for stock ticker: ${ticker.toUpperCase()}. Find the IV rank (0-100), current IV percentage, and sector.` }
+            { role: "user", content: `Analyze ${ticker.toUpperCase()} for covered call volatility scoring. Today is ${new Date().toLocaleDateString()}.` }
           ],
           tools: [{ type: "web_search_20250305", name: "web_search" }],
         }),
       });
       const data = await response.json();
-      const text = data.content
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "API error");
+      }
+      const text = (data.content || [])
         .map((item) => (item.type === "text" ? item.text : ""))
         .filter(Boolean)
         .join("\n");
       const clean = text.replace(/```json|```/g, "").trim();
-      // Try to extract JSON object even if surrounded by other text
       let parsed;
       try {
         parsed = JSON.parse(clean);
       } catch {
-        const jsonMatch = clean.match(/\{[\s\S]*?"ivRank"[\s\S]*?\}/);
-        if (jsonMatch) {
-          parsed = JSON.parse(jsonMatch[0]);
-        } else {
-          // Try to extract values with regex as last resort
-          const ivRankMatch = clean.match(/ivRank["\s:]+(\d+\.?\d*)/i);
-          const currentIVMatch = clean.match(/currentIV["\s:]+(\d+\.?\d*)/i);
-          const sectorMatch = clean.match(/sector["\s:]+["']([^"']+)["']/i);
-          parsed = {
-            ivRank: ivRankMatch ? parseFloat(ivRankMatch[1]) : 0,
-            currentIV: currentIVMatch ? parseFloat(currentIVMatch[1]) : 0,
-            sector: sectorMatch ? sectorMatch[1] : "Unknown",
-          };
-        }
+        const jsonMatch = clean.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+        else throw new Error("Could not parse response");
       }
-      const ivLevel = (parsed.currentIV || 0) >= 60 ? "High" : (parsed.currentIV || 0) >= 35 ? "Medium" : "Low";
+      const vs = parsed.volScore || 0;
       setPreview({
         ticker: ticker.toUpperCase(),
-        ivRank: parseFloat(parsed.ivRank) || 0,
-        currentIV: parseFloat(parsed.currentIV) || 0,
         sector: parsed.sector || "Unknown",
-        ivLevel,
+        price: parsed.price || 0,
+        volScore: vs,
+        beta: parsed.beta || 0,
+        move30d: parsed.move30d || "",
+        range52w: parsed.range52w || "",
+        volumeVsAvg: parsed.volumeVsAvg || "",
+        nextEarnings: parsed.nextEarnings || "",
+        why: parsed.why || "",
         dateAdded: today(),
+        dateScored: today(),
       });
     } catch (err) {
-      console.error("Fetch IV error:", err);
-      setError("Couldn't fetch IV data. You can add manually below.");
+      console.error("Fetch vol error:", err);
+      setError("Couldn't fetch data. You can add manually below.");
       setPreview({
         ticker: ticker.toUpperCase(),
-        ivRank: 0,
-        currentIV: 0,
         sector: "",
-        ivLevel: "Low",
+        price: 0,
+        volScore: 0,
+        beta: 0,
+        move30d: "",
+        range52w: "",
+        volumeVsAvg: "",
+        nextEarnings: "",
+        why: "",
         dateAdded: today(),
+        dateScored: "",
       });
     }
     setLoading(false);
   };
+
+  const vs = preview?.volScore || 0;
+  const vsColor = vs >= 70 ? "bg-green-500" : vs >= 45 ? "bg-yellow-500" : "bg-red-400";
+  const vsLabel = vs >= 70 ? "High" : vs >= 45 ? "Moderate" : "Low";
+  const vsLabelColor = vs >= 70 ? "text-green-700" : vs >= 45 ? "text-yellow-700" : "text-red-600";
 
   return (
     <div className="space-y-4">
@@ -2805,15 +2943,15 @@ function AddWatchlistForm({ onSubmit }) {
             value={ticker}
             onChange={(e) => { setTicker(e.target.value.toUpperCase()); setPreview(null); setError(""); }}
             placeholder="e.g. MARA"
-            onKeyDown={(e) => { if (e.key === "Enter") fetchIVData(); }}
+            onKeyDown={(e) => { if (e.key === "Enter") fetchVolData(); }}
           />
-          <Btn onClick={fetchIVData} disabled={!ticker.trim() || loading}>
+          <Btn onClick={fetchVolData} disabled={!ticker.trim() || loading}>
             {loading ? (
               <span className="flex items-center gap-1.5">
                 <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
-                Fetching...
+                Scoring...
               </span>
-            ) : "Lookup"}
+            ) : "Analyze"}
           </Btn>
         </div>
       </Field>
@@ -2832,54 +2970,67 @@ function AddWatchlistForm({ onSubmit }) {
         <div className="bg-gray-50 rounded-xl p-4 space-y-3 border border-gray-200">
           <div className="flex items-center justify-between">
             <span className="text-lg font-bold text-gray-900">{preview.ticker}</span>
-            <span className="text-xs text-gray-400">Data fetched via web search</span>
+            <span className="text-xs text-gray-400">{preview.sector}</span>
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <p className="text-xs text-gray-500 mb-1">IV Rank</p>
-              <div className="flex items-center gap-2">
-                <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${preview.ivRank >= 50 ? "bg-green-500" : preview.ivRank >= 30 ? "bg-yellow-500" : "bg-red-400"}`}
-                    style={{ width: `${Math.min(100, preview.ivRank)}%` }}
-                  />
-                </div>
-                <span className="text-sm font-semibold w-10 text-right">{preview.ivRank}</span>
-              </div>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-1">Current IV</p>
-              <p className="text-sm font-semibold">{preview.currentIV}%</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-1">IV Level</p>
-              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                preview.ivLevel === "High" ? "bg-green-100 text-green-800" : preview.ivLevel === "Medium" ? "bg-yellow-100 text-yellow-800" : "bg-red-100 text-red-700"
-              }`}>{preview.ivLevel}</span>
-            </div>
-          </div>
+
+          {/* Vol Score bar */}
           <div>
-            <p className="text-xs text-gray-500 mb-1">Sector</p>
-            <p className="text-sm font-medium text-gray-700">{preview.sector || "Unknown"}</p>
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs text-gray-500">Volatility Score</p>
+              <span className={`text-xs font-semibold ${vsLabelColor}`}>{vs}/100 — {vsLabel}</span>
+            </div>
+            <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${vsColor}`} style={{ width: `${Math.min(100, vs)}%` }} />
+            </div>
           </div>
-          {/* Allow manual overrides */}
+
+          <div className="grid grid-cols-3 gap-3 text-sm">
+            <div>
+              <p className="text-xs text-gray-500">Price</p>
+              <p className="font-semibold">{preview.price ? formatCurrency(preview.price) : "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Beta</p>
+              <p className="font-semibold">{preview.beta || "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">30d Move</p>
+              <p className={`font-semibold ${String(preview.move30d).startsWith("+") ? "text-green-700" : String(preview.move30d).startsWith("-") ? "text-red-600" : ""}`}>{preview.move30d || "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">52w Range</p>
+              <p className="font-semibold">{preview.range52w || "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Vol vs Avg</p>
+              <p className="font-semibold">{preview.volumeVsAvg || "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Next Earnings</p>
+              <p className="font-semibold">{preview.nextEarnings || "—"}</p>
+            </div>
+          </div>
+
+          {preview.why && (
+            <p className="text-xs text-gray-600 bg-white rounded-lg p-2 border border-gray-100">{preview.why}</p>
+          )}
+
+          {/* Manual overrides */}
           <details className="text-xs">
             <summary className="text-gray-400 cursor-pointer hover:text-gray-600">Edit values manually</summary>
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <Field label="IV Rank">
-                <Input type="number" min="0" max="100" value={preview.ivRank} onChange={(e) => setPreview(p => ({ ...p, ivRank: parseFloat(e.target.value) || 0 }))} />
+              <Field label="Vol Score (0-100)">
+                <Input type="number" min="0" max="100" value={preview.volScore} onChange={(e) => setPreview(p => ({ ...p, volScore: parseInt(e.target.value) || 0 }))} />
               </Field>
-              <Field label="Current IV (%)">
-                <Input type="number" step="0.1" value={preview.currentIV} onChange={(e) => {
-                  const val = parseFloat(e.target.value) || 0;
-                  setPreview(p => ({ ...p, currentIV: val, ivLevel: val >= 60 ? "High" : val >= 35 ? "Medium" : "Low" }));
-                }} />
+              <Field label="Beta">
+                <Input type="number" step="0.01" value={preview.beta} onChange={(e) => setPreview(p => ({ ...p, beta: parseFloat(e.target.value) || 0 }))} />
               </Field>
-              <div className="col-span-2">
-                <Field label="Sector">
-                  <Input value={preview.sector} onChange={(e) => setPreview(p => ({ ...p, sector: e.target.value }))} />
-                </Field>
-              </div>
+              <Field label="Sector">
+                <Input value={preview.sector} onChange={(e) => setPreview(p => ({ ...p, sector: e.target.value }))} />
+              </Field>
+              <Field label="Next Earnings">
+                <Input value={preview.nextEarnings} onChange={(e) => setPreview(p => ({ ...p, nextEarnings: e.target.value }))} />
+              </Field>
             </div>
           </details>
         </div>
@@ -2890,7 +3041,7 @@ function AddWatchlistForm({ onSubmit }) {
         disabled={!preview || loading}
         onClick={() => onSubmit(preview)}
       >
-        {preview ? `Add ${preview.ticker} to Watchlist` : "Enter ticker and click Lookup"}
+        {preview ? `Add ${preview.ticker} to Watchlist` : "Enter ticker and click Analyze"}
       </Btn>
     </div>
   );
