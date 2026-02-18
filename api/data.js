@@ -1,4 +1,12 @@
-import { kv } from '@vercel/kv';
+import Redis from 'ioredis';
+
+let redis;
+function getRedis() {
+  if (!redis) {
+    redis = new Redis(process.env.REDIS_URL);
+  }
+  return redis;
+}
 
 export default async function handler(req, res) {
   const code = req.query.code || req.body?.code;
@@ -8,13 +16,16 @@ export default async function handler(req, res) {
   }
 
   const key = `cc:${code.toLowerCase().trim()}`;
+  const client = getRedis();
 
   // GET — read data
   if (req.method === 'GET') {
     try {
-      const data = await kv.get(key);
-      return res.status(200).json({ data: data || null });
+      const raw = await client.get(key);
+      const data = raw ? JSON.parse(raw) : null;
+      return res.status(200).json({ data });
     } catch (error) {
+      console.error('Redis read error:', error);
       return res.status(500).json({ error: 'Failed to read data' });
     }
   }
@@ -24,9 +35,10 @@ export default async function handler(req, res) {
     try {
       const { data } = req.body;
       if (!data) return res.status(400).json({ error: 'No data provided' });
-      await kv.set(key, data);
+      await client.set(key, JSON.stringify(data));
       return res.status(200).json({ ok: true });
     } catch (error) {
+      console.error('Redis write error:', error);
       return res.status(500).json({ error: 'Failed to save data' });
     }
   }
