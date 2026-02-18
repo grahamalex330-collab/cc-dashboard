@@ -210,6 +210,7 @@ export default function CoveredCallDashboard() {
   const [scannerData, setScannerData] = useState(null);
   const [scannerLoading, setScannerLoading] = useState(false);
   const [scannerTimestamp, setScannerTimestamp] = useState(null);
+  const [scannerError, setScannerError] = useState(null);
   const [livePrices, setLivePrices] = useState({});
   const [pricesLoading, setPricesLoading] = useState(false);
   const [pricesTimestamp, setPricesTimestamp] = useState(null);
@@ -371,6 +372,7 @@ export default function CoveredCallDashboard() {
 
   const fetchScannerData = useCallback(async () => {
     setScannerLoading(true);
+    setScannerError(null);
     try {
       const existingTickers = [
         ...data.watchlist.map(w => w.ticker.toUpperCase()),
@@ -400,6 +402,8 @@ Your entire response must be parseable JSON and nothing else.`,
       const result = await response.json();
       if (!response.ok) {
         console.error("Scanner API error:", result);
+        const msg = result?.error?.message || `API returned ${response.status}`;
+        setScannerError(response.status === 504 ? "Request timed out — try again in a moment" : msg);
         setScannerLoading(false);
         return;
       }
@@ -431,6 +435,7 @@ Your entire response must be parseable JSON and nothing else.`,
       }
     } catch (err) {
       console.error("Scanner fetch error:", err);
+      setScannerError(err.message || "Failed to load — try again");
     }
     setScannerLoading(false);
   }, [data.watchlist, data.positions]);
@@ -1135,13 +1140,22 @@ Your entire response must be parseable JSON and nothing else.`,
                     <div className="p-12 text-center">
                       <div className="inline-flex items-center gap-2 text-gray-500">
                         <RefreshCw size={16} className="animate-spin" />
-                        <span>Scanning market for high-IV opportunities...</span>
+                        <span>Scanning market for opportunities...</span>
                       </div>
                       <div className="mt-4 space-y-2 max-w-md mx-auto">
                         {[...Array(5)].map((_, i) => (
                           <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" style={{ animationDelay: `${i * 100}ms` }} />
                         ))}
                       </div>
+                    </div>
+                  ) : scannerError && !scannerData ? (
+                    <div className="p-8 text-center">
+                      <div className="inline-flex items-center gap-2 text-red-600 mb-2">
+                        <AlertTriangle size={16} />
+                        <span className="font-medium">Scanner Error</span>
+                      </div>
+                      <p className="text-sm text-gray-500">{scannerError}</p>
+                      <Btn variant="secondary" size="sm" className="mt-3" onClick={fetchScannerData}>Try Again</Btn>
                     </div>
                   ) : !scannerData ? (
                     <div className="p-12 text-center text-gray-400">
