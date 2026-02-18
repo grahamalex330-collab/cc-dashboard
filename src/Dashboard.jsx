@@ -216,7 +216,9 @@ export default function CoveredCallDashboard() {
   const [showImport, setShowImport] = useState(false);
 
   const fetchLivePrices = useCallback(async () => {
-    const tickers = [...new Set(data.calls.filter(c => c.status === "open").map(c => c.ticker))];
+    const callTickers = data.calls.filter(c => c.status === "open").map(c => c.ticker);
+    const posTickers = data.positions.filter(p => !p.removed).map(p => p.ticker);
+    const tickers = [...new Set([...callTickers, ...posTickers])];
     if (tickers.length === 0) return;
     setPricesLoading(true);
     try {
@@ -247,7 +249,7 @@ export default function CoveredCallDashboard() {
       }
     } catch (err) { console.error("Price fetch error:", err); }
     setPricesLoading(false);
-  }, [data.calls]);
+  }, [data.calls, data.positions]);
 
   // Load data from API
   useEffect(() => {
