@@ -383,33 +383,16 @@ export default function CoveredCallDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 3000,
-          system: `You are a covered call analyst assistant. Search the web to find US stocks that are currently attractive for selling covered calls. Focus on stocks with high options activity, recent price momentum, and upcoming catalysts.
+          max_tokens: 2000,
+          system: `You are a stock screener. Search for 10 US stocks that are good covered call candidates right now. Look for most active options lists, stocks with big recent moves, or upcoming earnings.
 
-Look for:
-- Stocks with unusually high options volume or appearing on "most active options" lists
-- Stocks with significant recent price moves (up or down 10%+ in last 30 days)
-- Stocks with upcoming earnings or other catalysts
-- Stocks near their 52-week highs (good call premium)
-- Popular large-cap and mid-cap names with liquid weekly options
+Return ONLY a JSON array. No markdown, no backticks, no explanation. Format:
+[{"ticker":"XXX","sector":"Tech","price":45.2,"marketCap":"12B","volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","why":"High options volume after earnings beat"},...]
 
-For each stock, gather:
-- ticker: Stock symbol
-- sector: Industry sector
-- price: Current or most recent stock price
-- marketCap: Approximate market cap (e.g. "45B")
-- volumeVsAvg: Recent trading volume compared to average (e.g. "2.3x" or "1.1x" or "High" if exact number unavailable)
-- move30d: Approximate percentage price change over last 30 days (e.g. "+15%" or "-8%")
-- near52wHigh: true/false whether the stock is within 10% of its 52-week high
-- nextEarnings: Next earnings date if known (e.g. "Feb 25" or "Mar 3"), otherwise ""
-- catalyst: Brief note on any recent news, upgrades, or events driving activity
-- why: One sentence summary of why this stock is interesting for covered calls right now
-
-Return ONLY a raw JSON array of exactly 10 stocks. No markdown, no backticks, no explanation.
-Format: [{"ticker":"XXX","sector":"Technology","price":45.20,"marketCap":"12B","volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","catalyst":"Beat Q4 earnings, raised guidance","why":"High options volume with stock near 52w high after strong earnings beat"},...]
-Your entire response must be parseable JSON array and nothing else.`,
+Fields: ticker, sector, price, marketCap (e.g. "45B"), volumeVsAvg (e.g. "2.3x" or "High"), move30d (e.g. "+15%"), near52wHigh (bool), nextEarnings (date string or ""), why (one sentence).
+Your entire response must be parseable JSON and nothing else.`,
           messages: [
-            { role: "user", content: `Search for 10 US stocks that are currently the best candidates for selling covered calls. Look for stocks with high options activity, big recent price moves, upcoming earnings, or other catalysts that create premium opportunities. They should have market cap over $2B, stock price over $10, and liquid options.${excludeNote} Today's date is ${new Date().toLocaleDateString()}.` }
+            { role: "user", content: `Find 10 US stocks good for selling covered calls right now — high options volume, recent big price moves, or upcoming earnings. Market cap over $2B, price over $10.${excludeNote} Today is ${new Date().toLocaleDateString()}.` }
           ],
           tools: [{ type: "web_search_20250305", name: "web_search" }],
         }),
