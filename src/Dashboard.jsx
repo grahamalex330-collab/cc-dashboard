@@ -189,6 +189,10 @@ const Btn = ({ children, variant = "primary", size = "md", ...props }) => {
 };
 
 export default function CoveredCallDashboard() {
+  const [householdCode, setHouseholdCode] = useState(() => localStorage.getItem("cc_household_code") || "");
+  const [codeInput, setCodeInput] = useState("");
+  const [joined, setJoined] = useState(() => !!localStorage.getItem("cc_household_code"));
+
   const [data, setData] = useState(EMPTY_STATE);
   const [tab, setTab] = useState("Dashboard");
   const [loading, setLoading] = useState(true);
@@ -208,6 +212,7 @@ export default function CoveredCallDashboard() {
   const [livePrices, setLivePrices] = useState({});
   const [pricesLoading, setPricesLoading] = useState(false);
   const [pricesTimestamp, setPricesTimestamp] = useState(null);
+  const [syncStatus, setSyncStatus] = useState(null); // "saving" | "saved" | "error"
 
   const fetchLivePrices = useCallback(async () => {
     const tickers = [...new Set(data.calls.filter(c => c.status === "open").map(c => c.ticker))];
@@ -243,21 +248,91 @@ export default function CoveredCallDashboard() {
     setPricesLoading(false);
   }, [data.calls]);
 
-  // Persist
+  // Load data from API
   useEffect(() => {
+    if (!joined || !householdCode) return;
     (async () => {
       try {
-        const raw = localStorage.getItem("cc_dashboard_data");
-        if (raw) setData(JSON.parse(raw));
-      } catch {}
+        const res = await fetch(`/api/data?code=${encodeURIComponent(householdCode)}`);
+        const json = await res.json();
+        if (json.data) setData(json.data);
+      } catch (err) { console.error("Load error:", err); }
       setLoading(false);
     })();
-  }, []);
+  }, [joined, householdCode]);
 
+  // Save data to API
   const save = useCallback(async (newData) => {
     setData(newData);
-    try { localStorage.setItem("cc_dashboard_data", JSON.stringify(newData)); } catch {}
-  }, []);
+    setSyncStatus("saving");
+    try {
+      await fetch("/api/data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: householdCode, data: newData }),
+      });
+      setSyncStatus("saved");
+      setTimeout(() => setSyncStatus(null), 2000);
+    } catch {
+      setSyncStatus("error");
+    }
+  }, [householdCode]);
+
+  // Join handler
+  const handleJoin = () => {
+    const code = codeInput.trim().toLowerCase();
+    if (code.length < 2) return;
+    setHouseholdCode(code);
+    localStorage.setItem("cc_household_code", code);
+    setJoined(true);
+  };
+
+  // Leave household
+  const handleLeave = () => {
+    localStorage.removeItem("cc_household_code");
+    setHouseholdCode("");
+    setJoined(false);
+    setData(EMPTY_STATE);
+    setCodeInput("");
+    setLoading(true);
+  };
+
+  // Household code entry screen
+  if (!joined) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-md w-full space-y-6">
+          <div className="text-center">
+            <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mx-auto mb-4">
+              <TrendingUp className="text-white" size={24} />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900">Covered Call Dashboard</h1>
+            <p className="text-sm text-gray-500 mt-2">Enter a household code to get started. Anyone with the same code shares the same data.</p>
+          </div>
+          <div className="space-y-3">
+            <label className="block text-sm font-medium text-gray-700">Household Code</label>
+            <input
+              type="text"
+              value={codeInput}
+              onChange={(e) => setCodeInput(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+              onKeyDown={(e) => e.key === "Enter" && handleJoin()}
+              placeholder="e.g. smith-family"
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent text-lg"
+              autoFocus
+            />
+            <p className="text-xs text-gray-400">Letters, numbers, and dashes only. Share this code with your partner so you see the same dashboard.</p>
+          </div>
+          <button
+            onClick={handleJoin}
+            disabled={codeInput.trim().length < 2}
+            className="w-full py-3 bg-gray-900 text-white rounded-xl font-medium hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Enter Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Scanner: load cache on mount
   useEffect(() => {
@@ -564,6 +639,15 @@ Your entire response must be parseable JSON array and nothing else.`,
               <h1 className="text-lg font-bold text-gray-900">CoveredCall Tracker</h1>
             </div>
             <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 text-xs text-gray-400 mr-2">
+                <span className="bg-gray-100 px-2 py-1 rounded-md font-mono">{householdCode}</span>
+                {syncStatus === "saving" && <span className="text-yellow-600">Saving...</span>}
+                {syncStatus === "saved" && <span className="text-green-600">✓ Saved</span>}
+                {syncStatus === "error" && <span className="text-red-600">Save failed</span>}
+                <button onClick={handleLeave} className="text-gray-400 hover:text-gray-600 ml-1" title="Switch household">
+                  <X size={14} />
+                </button>
+              </div>
               <Btn variant="secondary" size="sm" onClick={() => setShowAddPosition(true)}><Plus size={14} /> Add Stock</Btn>
               <Btn size="sm" onClick={() => { setWriteCallTicker(activePositions[0]?.ticker || ""); setShowWriteCall(true); }}><Edit2 size={14} /> Write Call</Btn>
             </div>
