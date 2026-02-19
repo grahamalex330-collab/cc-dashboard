@@ -31,6 +31,73 @@ const GLOSSARY = {
 };
 
 const Tip = ({ term, children }) => {
+
+// ── FMP helpers ──
+const computeVolScore = ({ price, yearHigh, yearLow, beta, move30dPct, volume, avgVolume, daysToEarnings }) => {
+  const rangePct = price > 0 ? ((yearHigh - yearLow) / price) * 100 : 0;
+  const rangeScore = Math.min(25, rangePct * 0.25);
+  const absMov = Math.abs(move30dPct || 0);
+  const momentumScore = Math.min(20, absMov * 0.67);
+  const b = beta || 1;
+  const betaScore = b >= 2 ? 20 : b >= 1.5 ? 16 : b >= 1.2 ? 12 : b >= 1.0 ? 8 : b >= 0.7 ? 4 : 2;
+  let catalystScore = 0;
+  if (daysToEarnings != null && daysToEarnings >= 0) {
+    catalystScore = daysToEarnings <= 3 ? 20 : daysToEarnings <= 7 ? 16 : daysToEarnings <= 14 ? 12 : daysToEarnings <= 30 ? 6 : 0;
+  }
+  const volRatio = avgVolume > 0 ? volume / avgVolume : 1;
+  const volumeScore = volRatio >= 3 ? 15 : volRatio >= 2 ? 12 : volRatio >= 1.5 ? 9 : volRatio >= 1.0 ? 5 : 2;
+  return Math.round(rangeScore + momentumScore + betaScore + catalystScore + volumeScore);
+};
+
+const fmtMktCap = (mc) => {
+  if (!mc) return "—";
+  if (mc >= 1e12) return `${(mc / 1e12).toFixed(1)}T`;
+  if (mc >= 1e9) return `${(mc / 1e9).toFixed(0)}B`;
+  if (mc >= 1e6) return `${(mc / 1e6).toFixed(0)}M`;
+  return String(mc);
+};
+
+const generateWhy = ({ volRatio, beta, daysToEarnings, move30dPct, rangePct }) => {
+  const r = [];
+  if (volRatio >= 2) r.push(`Volume ${volRatio.toFixed(1)}x avg`);
+  if (beta >= 1.5) r.push(`High beta ${beta.toFixed(2)}`);
+  if (daysToEarnings != null && daysToEarnings <= 14) r.push(`Earnings in ${daysToEarnings}d`);
+  if (Math.abs(move30dPct) >= 10) r.push(`${move30dPct > 0 ? "Up" : "Down"} ${Math.abs(move30dPct).toFixed(0)}% in 30d`);
+  if (rangePct >= 50) r.push(`Wide 52w range (${rangePct.toFixed(0)}%)`);
+  return r.join(" · ") || "Active options candidate";
+};
+
+const enrichFromFMP = (q, p) => {
+  const price = q.price || 0;
+  const yearHigh = q.yearHigh || 0;
+  const yearLow = q.yearLow || 0;
+  const beta = p?.beta || 1;
+  const volume = q.volume || 0;
+  const avgVolume = q.avgVolume || 1;
+  const priceAvg50 = q.priceAvg50 || price;
+  const move30dPct = priceAvg50 > 0 ? ((price - priceAvg50) / priceAvg50) * 100 : 0;
+  const rangePct = price > 0 ? ((yearHigh - yearLow) / price) * 100 : 0;
+  const volRatio = avgVolume > 0 ? volume / avgVolume : 1;
+  let daysToEarnings = null;
+  if (q.earningsAnnouncement) {
+    const d = Math.ceil((new Date(q.earningsAnnouncement) - new Date()) / 86400000);
+    if (d >= 0) daysToEarnings = d;
+  }
+  const volScore = computeVolScore({ price, yearHigh, yearLow, beta, move30dPct, volume, avgVolume, daysToEarnings });
+  return {
+    sector: p?.sector || "",
+    price,
+    volScore,
+    beta: beta ? parseFloat(beta.toFixed(2)) : 0,
+    move30d: `${move30dPct >= 0 ? "+" : ""}${move30dPct.toFixed(1)}%`,
+    range52w: `${rangePct.toFixed(0)}%`,
+    volumeVsAvg: `${volRatio.toFixed(1)}x`,
+    near52wHigh: yearHigh > 0 && price >= yearHigh * 0.9,
+    nextEarnings: daysToEarnings != null && daysToEarnings <= 30 ? `${daysToEarnings}d` : "",
+    marketCap: fmtMktCap(q.marketCap),
+    why: generateWhy({ volRatio, beta, daysToEarnings, move30dPct, rangePct }),
+  };
+};
   const [show, setShow] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const iconRef = React.useRef(null);
@@ -228,34 +295,12 @@ export default function CoveredCallDashboard() {
     if (tickers.length === 0) return;
     setPricesLoading(true);
     try {
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 500,
-          system: `You are a stock price lookup assistant. Search for current or most recent closing prices for the given tickers. Return ONLY a raw JSON object mapping ticker to price. No markdown, no backticks, no explanation. Format: {"AAPL": 185.50, "PLTR": 78.20} Your entire response must be parseable JSON and nothing else.`,
-          messages: [
-            { role: "user", content: `Get current stock prices (or most recent close if after hours) for: ${tickers.join(", ")}. Today is ${new Date().toLocaleDateString()}.` }
-          ],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        console.error("API error:", result);
-        setPricesLoading(false);
-        return;
-      }
-      const text = (result.content || []).map((item) => (item.type === "text" ? item.text : "")).filter(Boolean).join("\n");
-      const clean = text.replace(/```json|```/g, "").trim();
-      let parsed;
-      try { parsed = JSON.parse(clean); } catch {
-        const jsonMatch = clean.match(/\{[\s\S]*\}/);
-        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-      }
-      if (parsed && typeof parsed === "object") {
-        setLivePrices(parsed);
+      const resp = await fetch(`/api/fmp?action=quote&tickers=${tickers.join(",")}`);
+      const quotes = await resp.json();
+      if (Array.isArray(quotes)) {
+        const prices = {};
+        quotes.forEach(q => { if (q.symbol && q.price) prices[q.symbol] = q.price; });
+        setLivePrices(prices);
         setPricesTimestamp(new Date().toISOString());
       }
     } catch (err) { console.error("Price fetch error:", err); }
@@ -378,67 +423,42 @@ export default function CoveredCallDashboard() {
     setScannerLoading(true);
     setScannerError(null);
     try {
-      const existingTickers = [
+      const existingTickers = new Set([
         ...data.watchlist.map(w => w.ticker.toUpperCase()),
         ...data.positions.map(p => p.ticker.toUpperCase()),
-      ];
-      const excludeNote = existingTickers.length > 0 ? ` Exclude these tickers which the user already tracks: ${existingTickers.join(", ")}.` : "";
-
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 2000,
-          system: `You are a stock screener. Search for 10 US stocks that are good covered call candidates right now. Look for most active options lists, stocks with big recent moves, or upcoming earnings.
-
-Return ONLY a JSON array. No markdown, no backticks, no explanation. Format:
-[{"ticker":"XXX","sector":"Tech","price":45.2,"marketCap":"12B","volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","why":"High options volume after earnings beat"},...]
-
-Fields: ticker, sector, price, marketCap (e.g. "45B"), volumeVsAvg (e.g. "2.3x" or "High"), move30d (e.g. "+15%"), near52wHigh (bool), nextEarnings (date string or ""), why (one sentence).
-Your entire response must be parseable JSON and nothing else.`,
-          messages: [
-            { role: "user", content: `Find 10 US stocks good for selling covered calls right now — high options volume, recent big price moves, or upcoming earnings. Market cap over $2B, price over $10.${excludeNote} Today is ${new Date().toLocaleDateString()}.` }
-          ],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
+      ]);
+      const [activesResp, gainersResp] = await Promise.all([
+        fetch("/api/fmp?action=actives"),
+        fetch("/api/fmp?action=gainers"),
+      ]);
+      const actives = await activesResp.json();
+      const gainers = await gainersResp.json();
+      if (actives?.error || gainers?.error) throw new Error(actives?.error || gainers?.error);
+      const seen = new Set();
+      const candidates = [...(actives || []), ...(gainers || [])]
+        .filter(s => {
+          if (!s.symbol || seen.has(s.symbol) || existingTickers.has(s.symbol)) return false;
+          if (/[^A-Z]/.test(s.symbol) || s.symbol.length > 5) return false;
+          seen.add(s.symbol);
+          return (s.price || 0) >= 10 && (s.marketCap || 0) >= 2e9;
+        })
+        .slice(0, 20);
+      if (candidates.length === 0) { setScannerError("No matching stocks found"); setScannerLoading(false); return; }
+      const profileResp = await fetch(`/api/fmp?action=profile&tickers=${candidates.map(c => c.symbol).join(",")}`);
+      const profiles = await profileResp.json();
+      const profileMap = {};
+      (Array.isArray(profiles) ? profiles : []).forEach(p => { profileMap[p.symbol] = p; });
+      const results = candidates.map(s => {
+        const enriched = enrichFromFMP(s, profileMap[s.symbol]);
+        return { ticker: s.symbol, ...enriched };
       });
-      const result = await response.json();
-      if (!response.ok) {
-        console.error("Scanner API error:", result);
-        const msg = result?.error?.message || `API returned ${response.status}`;
-        setScannerError(response.status === 504 ? "Request timed out — try again in a moment" : msg);
-        setScannerLoading(false);
-        return;
-      }
-      const text = (result.content || [])
-        .map((item) => (item.type === "text" ? item.text : ""))
-        .filter(Boolean)
-        .join("\n");
-      const clean = text.replace(/```json|```/g, "").trim();
-
-      let parsed;
-      try {
-        parsed = JSON.parse(clean);
-      } catch {
-        const arrMatch = clean.match(/\[[\s\S]*\]/);
-        if (arrMatch) {
-          parsed = JSON.parse(arrMatch[0]);
-        } else {
-          throw new Error("Could not parse scanner response");
-        }
-      }
-
-      if (Array.isArray(parsed)) {
-        const timestamp = new Date().toISOString();
-        setScannerData(parsed);
-        setScannerTimestamp(timestamp);
-        try {
-          localStorage.setItem("cc_scanner_cache", JSON.stringify({ stocks: parsed, timestamp }));
-        } catch {}
-      }
+      results.sort((a, b) => (b.volScore || 0) - (a.volScore || 0));
+      const top10 = results.slice(0, 10);
+      setScannerData(top10);
+      setScannerTimestamp(new Date().toISOString());
+      try { localStorage.setItem("cc_scanner_cache", JSON.stringify({ stocks: top10, timestamp: new Date().toISOString() })); } catch {}
     } catch (err) {
-      console.error("Scanner fetch error:", err);
+      console.error("Scanner error:", err);
       setScannerError(err.message || "Failed to load — try again");
     }
     setScannerLoading(false);
@@ -449,63 +469,24 @@ Your entire response must be parseable JSON and nothing else.`,
     if (tickers.length === 0) return;
     setWatchlistScoresLoading(true);
     try {
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 3000,
-          system: `You are a volatility analyst. For each stock ticker given, search for key volatility data and compute a Volatility Score (0-100) for covered call attractiveness.
-
-Score components:
-- Range (25 pts): (52wHigh - 52wLow) / currentPrice — wider range = more volatile = higher score
-- Momentum (20 pts): absolute 30-day price move — bigger recent swings = higher
-- Beta (20 pts): beta > 1.5 = full points, 1.0-1.5 = partial, < 1.0 = low
-- Catalyst (20 pts): earnings within 14 days = high, recent major news = moderate
-- Volume (15 pts): unusual volume vs average — 2x+ = full, 1.3x+ = partial
-
-Return ONLY a JSON object mapping ticker to data. No markdown, no backticks, no explanation. Format:
-{"AAPL":{"sector":"Technology","price":185.5,"volScore":62,"beta":1.21,"move30d":"+8%","range52w":"32%","volumeVsAvg":"1.4x","nextEarnings":"Apr 24","why":"Moderate vol with earnings approaching"},"TSLA":{...}}
-Your entire response must be parseable JSON and nothing else.`,
-          messages: [
-            { role: "user", content: `Analyze these stocks for covered call volatility scoring: ${tickers.join(", ")}. Today is ${new Date().toLocaleDateString()}.` }
-          ],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
+      const tickerStr = tickers.join(",");
+      const [quoteResp, profileResp] = await Promise.all([
+        fetch(`/api/fmp?action=quote&tickers=${tickerStr}`),
+        fetch(`/api/fmp?action=profile&tickers=${tickerStr}`),
+      ]);
+      const quotes = await quoteResp.json();
+      const profiles = await profileResp.json();
+      const quoteMap = {};
+      (Array.isArray(quotes) ? quotes : []).forEach(q => { quoteMap[q.symbol] = q; });
+      const profileMap = {};
+      (Array.isArray(profiles) ? profiles : []).forEach(p => { profileMap[p.symbol] = p; });
+      const updated = data.watchlist.map(w => {
+        const q = quoteMap[w.ticker.toUpperCase()];
+        if (!q) return w;
+        const enriched = enrichFromFMP(q, profileMap[w.ticker.toUpperCase()]);
+        return { ...w, ...enriched, dateScored: today() };
       });
-      const result = await response.json();
-      if (!response.ok) {
-        console.error("Watchlist scores API error:", result);
-        setWatchlistScoresLoading(false);
-        return;
-      }
-      const text = (result.content || []).map(item => item.type === "text" ? item.text : "").filter(Boolean).join("\n");
-      const clean = text.replace(/```json|```/g, "").trim();
-      let parsed;
-      try { parsed = JSON.parse(clean); } catch {
-        const jsonMatch = clean.match(/\{[\s\S]*\}/);
-        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-      }
-      if (parsed && typeof parsed === "object") {
-        const updated = data.watchlist.map(w => {
-          const d = parsed[w.ticker.toUpperCase()];
-          if (!d) return w;
-          return {
-            ...w,
-            sector: d.sector || w.sector,
-            price: d.price || w.price,
-            volScore: d.volScore || 0,
-            beta: d.beta || 0,
-            move30d: d.move30d || "",
-            range52w: d.range52w || "",
-            volumeVsAvg: d.volumeVsAvg || "",
-            nextEarnings: d.nextEarnings || "",
-            why: d.why || "",
-            dateScored: today(),
-          };
-        });
-        setData(prev => ({ ...prev, watchlist: updated }));
-      }
+      setData(prev => ({ ...prev, watchlist: updated }));
     } catch (err) { console.error("Watchlist scores error:", err); }
     setWatchlistScoresLoading(false);
   }, [data.watchlist]);
@@ -1235,7 +1216,7 @@ Your entire response must be parseable JSON and nothing else.`,
                 <div className="flex items-center gap-2">
                   <Zap size={18} className="text-amber-500" />
                   <h2 className="text-lg font-semibold text-gray-900">CC Opportunities</h2>
-                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Top 10 by Activity & Momentum</span>
+                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Top 10 by Vol Score</span>
                 </div>
                 <div className="flex items-center gap-3">
                   {scannerTimestamp && (
@@ -1283,6 +1264,7 @@ Your entire response must be parseable JSON and nothing else.`,
                           <th className="px-4 py-3">Ticker</th>
                           <th className="px-4 py-3">Sector</th>
                           <th className="px-4 py-3">Price</th>
+                          <th className="px-4 py-3"><Tip term="volScore">Vol Score</Tip></th>
                           <th className="px-4 py-3">Mkt Cap</th>
                           <th className="px-4 py-3"><Tip term="volumeVsAvg">Vol vs Avg</Tip></th>
                           <th className="px-4 py-3">30d Move</th>
@@ -1303,6 +1285,16 @@ Your entire response must be parseable JSON and nothing else.`,
                               <td className="px-4 py-3 font-bold text-gray-900">{s.ticker || "—"}</td>
                               <td className="px-4 py-3 text-gray-600">{s.sector || "—"}</td>
                               <td className="px-4 py-3">{s.price ? formatCurrency(s.price) : "—"}</td>
+                              <td className="px-4 py-3">
+                                {(s.volScore || 0) > 0 ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="w-10 h-2 bg-gray-100 rounded-full overflow-hidden">
+                                      <div className={`h-full rounded-full ${(s.volScore||0) >= 70 ? "bg-green-500" : (s.volScore||0) >= 45 ? "bg-yellow-500" : "bg-red-400"}`} style={{ width: `${Math.min(100, s.volScore)}%` }} />
+                                    </div>
+                                    <span className="text-xs font-semibold">{s.volScore}</span>
+                                  </div>
+                                ) : "—"}
+                              </td>
                               <td className="px-4 py-3 text-gray-500">{s.marketCap || "—"}</td>
                               <td className="px-4 py-3">
                                 {s.volumeVsAvg ? (
@@ -1370,7 +1362,7 @@ Your entire response must be parseable JSON and nothing else.`,
                 </div>
                 {scannerData && (
                   <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 rounded-b-xl">
-                    <p className="text-xs text-gray-400">Filters: US equities · Market cap &gt; $2B · Stock price &gt; $10 · Liquid weekly options · Sorted by activity &amp; momentum</p>
+                    <p className="text-xs text-gray-400">Source: FMP · Most active + biggest gainers · Market cap &gt; $2B · Price &gt; $10 · Sorted by Volatility Score</p>
                   </div>
                 )}
               </Card>
@@ -2343,40 +2335,15 @@ function WriteCallForm({ positions, events, defaultTicker, onSubmit }) {
     setPriceLoading(true);
     setPriceSource("");
     try {
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 300,
-          system: `You are a stock price lookup assistant. Search for the current or most recent closing price of the given stock ticker. Return ONLY a raw JSON object with no markdown, no backticks, no explanation. Format: {"price": <number>, "source": "<description like 'Current price' or 'Previous close'>"} Your entire response must be parseable JSON and nothing else.`,
-          messages: [
-            { role: "user", content: `What is the current stock price of ${ticker}? If the market is closed, return the most recent closing price. Today is ${new Date().toLocaleDateString()}.` }
-          ],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
-      });
-      const data = await response.json();
-      const text = data.content.map((item) => (item.type === "text" ? item.text : "")).filter(Boolean).join("\n");
-      const clean = text.replace(/```json|```/g, "").trim();
-      let parsed;
-      try {
-        parsed = JSON.parse(clean);
-      } catch {
-        const jsonMatch = clean.match(/\{[\s\S]*?"price"[\s\S]*?\}/);
-        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-        else {
-          const priceMatch = clean.match(/price["\s:]+(\d+\.?\d*)/i);
-          parsed = { price: priceMatch ? parseFloat(priceMatch[1]) : 0, source: "Estimated" };
-        }
+      const resp = await fetch(`/api/fmp?action=quote&tickers=${ticker.toUpperCase()}`);
+      const quotes = await resp.json();
+      if (Array.isArray(quotes) && quotes.length > 0 && quotes[0].price > 0) {
+        const q = quotes[0];
+        setForm((f) => ({ ...f, currentPrice: String(q.price) }));
+        const chg = q.change || 0;
+        setPriceSource(chg >= 0 ? `↑ $${chg.toFixed(2)} today` : `↓ $${Math.abs(chg).toFixed(2)} today`);
       }
-      if (parsed && parsed.price > 0) {
-        setForm((f) => ({ ...f, currentPrice: String(parsed.price) }));
-        setPriceSource(parsed.source || "Latest price");
-      }
-    } catch (err) {
-      console.error("Price fetch error:", err);
-    }
+    } catch (err) { console.error("Price fetch error:", err); }
     setPriceLoading(false);
   }, []);
 
@@ -2853,78 +2820,30 @@ function AddWatchlistForm({ onSubmit }) {
     setError("");
     setPreview(null);
     try {
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: `You are a volatility analyst. For the given stock, search for key data and compute a Volatility Score (0-100) for covered call attractiveness.
-
-Score components:
-- Range (25 pts): (52wHigh - 52wLow) / currentPrice — wider = higher
-- Momentum (20 pts): absolute 30-day move — bigger = higher
-- Beta (20 pts): >1.5 = full, 1.0-1.5 = partial, <1.0 = low
-- Catalyst (20 pts): earnings within 14 days = high, major news = moderate
-- Volume (15 pts): volume vs average — 2x+ = full, 1.3x+ = partial
-
-Return ONLY a raw JSON object. No markdown, no backticks. Format:
-{"sector":"Technology","price":185.5,"volScore":62,"beta":1.21,"move30d":"+8%","range52w":"32%","volumeVsAvg":"1.4x","nextEarnings":"Apr 24","why":"Moderate vol with earnings approaching"}
-Your entire response must be parseable JSON and nothing else.`,
-          messages: [
-            { role: "user", content: `Analyze ${ticker.toUpperCase()} for covered call volatility scoring. Today is ${new Date().toLocaleDateString()}.` }
-          ],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error?.message || "API error");
-      }
-      const text = (data.content || [])
-        .map((item) => (item.type === "text" ? item.text : ""))
-        .filter(Boolean)
-        .join("\n");
-      const clean = text.replace(/```json|```/g, "").trim();
-      let parsed;
-      try {
-        parsed = JSON.parse(clean);
-      } catch {
-        const jsonMatch = clean.match(/\{[\s\S]*\}/);
-        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-        else throw new Error("Could not parse response");
-      }
-      const vs = parsed.volScore || 0;
+      const tickerUpper = ticker.toUpperCase();
+      const [quoteResp, profileResp] = await Promise.all([
+        fetch(`/api/fmp?action=quote&tickers=${tickerUpper}`),
+        fetch(`/api/fmp?action=profile&tickers=${tickerUpper}`),
+      ]);
+      const quotes = await quoteResp.json();
+      const profiles = await profileResp.json();
+      const q = Array.isArray(quotes) && quotes[0];
+      const p = Array.isArray(profiles) && profiles[0];
+      if (!q || !q.price) throw new Error("Ticker not found");
+      const enriched = enrichFromFMP(q, p);
       setPreview({
-        ticker: ticker.toUpperCase(),
-        sector: parsed.sector || "Unknown",
-        price: parsed.price || 0,
-        volScore: vs,
-        beta: parsed.beta || 0,
-        move30d: parsed.move30d || "",
-        range52w: parsed.range52w || "",
-        volumeVsAvg: parsed.volumeVsAvg || "",
-        nextEarnings: parsed.nextEarnings || "",
-        why: parsed.why || "",
+        ticker: tickerUpper,
+        ...enriched,
         dateAdded: today(),
         dateScored: today(),
       });
     } catch (err) {
       console.error("Fetch vol error:", err);
-      setError("Couldn't fetch data. You can add manually below.");
+      setError(err.message === "Ticker not found" ? "Ticker not found — check the symbol and try again." : "Couldn't fetch data. You can add manually below.");
       setPreview({
-        ticker: ticker.toUpperCase(),
-        sector: "",
-        price: 0,
-        volScore: 0,
-        beta: 0,
-        move30d: "",
-        range52w: "",
-        volumeVsAvg: "",
-        nextEarnings: "",
-        why: "",
-        dateAdded: today(),
-        dateScored: "",
+        ticker: ticker.toUpperCase(), sector: "", price: 0, volScore: 0, beta: 0,
+        move30d: "", range52w: "", volumeVsAvg: "", nextEarnings: "", why: "",
+        marketCap: "", near52wHigh: false, dateAdded: today(), dateScored: "",
       });
     }
     setLoading(false);
