@@ -411,10 +411,11 @@ export default function CoveredCallDashboard() {
     })();
   }, []);
 
-  // Auto-fetch live prices when on Dashboard with open calls
+  // Auto-fetch live prices when on Dashboard with open calls (5-min cache)
   useEffect(() => {
     const hasOpenCalls = data.calls.some(c => c.status === "open");
-    if (tab === "Dashboard" && hasOpenCalls && !pricesLoading && !loading && Object.keys(livePrices).length === 0) {
+    const cacheAge = pricesTimestamp ? (Date.now() - new Date(pricesTimestamp).getTime()) / 60000 : 999;
+    if (tab === "Dashboard" && hasOpenCalls && !pricesLoading && !loading && cacheAge > 5) {
       fetchLivePrices();
     }
   }, [tab, loading, data.calls]);
@@ -490,40 +491,24 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
     if (tickers.length === 0) return;
     setWatchlistScoresLoading(true);
     try {
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 1500,
-          system: `Volatility analyst. For each ticker, find: sector, price, beta, 30d move, 52w range %, volume vs avg, next earnings date. Compute volScore 0-100 based on range(25pts), momentum(20pts), beta(20pts), catalyst(20pts), volume(15pts).
-Return ONLY JSON: {"AAPL":{"sector":"Tech","price":185,"volScore":62,"beta":1.21,"move30d":"+8%","range52w":"32%","volumeVsAvg":"1.4x","nextEarnings":"Apr 24","why":"One sentence"},...}
-JSON only, no other text.`,
-          messages: [
-            { role: "user", content: `Score: ${tickers.join(", ")}. Date: ${new Date().toLocaleDateString()}.` }
-          ],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
+      const results = await Promise.all(tickers.map(async (t) => {
+        try {
+          const [qResp, pResp] = await Promise.all([
+            fetch(`/api/fmp?action=quote&tickers=${t}`),
+            fetch(`/api/fmp?action=profile&tickers=${t}`),
+          ]);
+          const q = await qResp.json().then(d => Array.isArray(d) && d[0] || null);
+          const p = await pResp.json().then(d => Array.isArray(d) && d[0] || null);
+          return { ticker: t, q, p };
+        } catch { return { ticker: t, q: null, p: null }; }
+      }));
+      const updated = data.watchlist.map(w => {
+        const r = results.find(r => r.ticker === w.ticker.toUpperCase());
+        if (!r?.q) return w;
+        const enriched = enrichFromFMP(r.q, r.p);
+        return { ...w, ...enriched, dateScored: today() };
       });
-      const result = await response.json();
-      if (!response.ok) { setWatchlistScoresLoading(false); return; }
-      const text = (result.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
-      const clean = text.replace(/```json|```/g, "").trim();
-      let parsed;
-      try { parsed = JSON.parse(clean); } catch {
-        const m = clean.match(/\{[\s\S]*\}/);
-        if (m) parsed = JSON.parse(m[0]);
-      }
-      if (parsed && typeof parsed === "object") {
-        const updated = data.watchlist.map(w => {
-          const d = parsed[w.ticker.toUpperCase()];
-          if (!d) return w;
-          return { ...w, sector: d.sector || w.sector, price: d.price || w.price, volScore: d.volScore || 0,
-            beta: d.beta || 0, move30d: d.move30d || "", range52w: d.range52w || "",
-            volumeVsAvg: d.volumeVsAvg || "", nextEarnings: d.nextEarnings || "", why: d.why || "", dateScored: today() };
-        });
-        setData(prev => ({ ...prev, watchlist: updated }));
-      }
+      setData(prev => ({ ...prev, watchlist: updated }));
     } catch (err) { console.error("Watchlist scores error:", err); }
     setWatchlistScoresLoading(false);
   }, [data.watchlist]);
@@ -2384,11 +2369,11 @@ function WriteCallForm({ positions, events, defaultTicker, onSubmit }) {
     setPriceLoading(false);
   }, []);
 
-  // Auto-fetch price when ticker changes
+  // Auto-fetch price when ticker changes (debounced 500ms)
   useEffect(() => {
-    if (form.ticker && form.ticker.length >= 1) {
-      fetchPrice(form.ticker);
-    }
+    if (!form.ticker || form.ticker.length < 1) return;
+    const timer = setTimeout(() => fetchPrice(form.ticker), 500);
+    return () => clearTimeout(timer);
   }, [form.ticker]);
 
   const currentPrice = parseFloat(form.currentPrice) || 0;
@@ -2857,41 +2842,19 @@ function AddWatchlistForm({ onSubmit }) {
     setError("");
     setPreview(null);
     try {
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 500,
-          system: `Volatility analyst. For the given ticker find: sector, price, beta, 30d move, 52w range %, volume vs avg, next earnings. Compute volScore 0-100 based on range(25pts), momentum(20pts), beta(20pts), catalyst(20pts), volume(15pts).
-Return ONLY JSON: {"sector":"Tech","price":185,"volScore":62,"beta":1.21,"move30d":"+8%","range52w":"32%","volumeVsAvg":"1.4x","nextEarnings":"Apr 24","why":"One sentence"}
-JSON only, no other text.`,
-          messages: [
-            { role: "user", content: `Analyze ${ticker.toUpperCase()}. Date: ${new Date().toLocaleDateString()}.` }
-          ],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error?.message || "API error");
-      const text = (data.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
-      const clean = text.replace(/```json|```/g, "").trim();
-      let parsed;
-      try { parsed = JSON.parse(clean); } catch {
-        const m = clean.match(/\{[\s\S]*\}/);
-        if (m) parsed = JSON.parse(m[0]); else throw new Error("Could not parse");
-      }
-      setPreview({
-        ticker: ticker.toUpperCase(), sector: parsed.sector || "Unknown", price: parsed.price || 0,
-        volScore: parsed.volScore || 0, beta: parsed.beta || 0, move30d: parsed.move30d || "",
-        range52w: parsed.range52w || "", volumeVsAvg: parsed.volumeVsAvg || "",
-        nextEarnings: parsed.nextEarnings || "", why: parsed.why || "",
-        marketCap: parsed.marketCap || "", near52wHigh: parsed.near52wHigh || false,
-        dateAdded: today(), dateScored: today(),
-      });
+      const t = ticker.toUpperCase();
+      const [qResp, pResp] = await Promise.all([
+        fetch(`/api/fmp?action=quote&tickers=${t}`),
+        fetch(`/api/fmp?action=profile&tickers=${t}`),
+      ]);
+      const q = await qResp.json().then(d => Array.isArray(d) && d[0] || null);
+      const p = await pResp.json().then(d => Array.isArray(d) && d[0] || null);
+      if (!q || !q.price) throw new Error("Ticker not found");
+      const enriched = enrichFromFMP(q, p);
+      setPreview({ ticker: t, ...enriched, dateAdded: today(), dateScored: today() });
     } catch (err) {
       console.error("Fetch vol error:", err);
-      setError(err.message || "Couldn't fetch data. You can add manually below.");
+      setError(err.message === "Ticker not found" ? "Ticker not found — check the symbol." : "Couldn't fetch data. You can add manually below.");
       setPreview({
         ticker: ticker.toUpperCase(), sector: "", price: 0, volScore: 0, beta: 0,
         move30d: "", range52w: "", volumeVsAvg: "", nextEarnings: "", why: "",
