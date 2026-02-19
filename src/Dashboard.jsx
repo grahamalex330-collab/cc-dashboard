@@ -30,8 +30,6 @@ const GLOSSARY = {
   range52w: "The stock's 52-week price range expressed as a percentage of current price. A wider range indicates higher historical volatility. Stocks with 50%+ range tend to have richer option premiums.",
 };
 
-const Tip = ({ term, children }) => {
-
 // ── FMP helpers ──
 const computeVolScore = ({ price, yearHigh, yearLow, beta, move30dPct, volume, avgVolume, daysToEarnings }) => {
   const rangePct = price > 0 ? ((yearHigh - yearLow) / price) * 100 : 0;
@@ -98,6 +96,8 @@ const enrichFromFMP = (q, p) => {
     why: generateWhy({ volRatio, beta, daysToEarnings, move30dPct, rangePct }),
   };
 };
+
+const Tip = ({ term, children }) => {
   const [show, setShow] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const iconRef = React.useRef(null);
