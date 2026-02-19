@@ -7,7 +7,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   if (!FMP_KEY) {
-    return res.status(500).json({ error: "FMP_API_KEY not configured. Get a free key at https://financialmodelingprep.com/developer/docs" });
+    return res.status(500).json({ error: "FMP_API_KEY not configured" });
   }
 
   const { action, tickers } = req.query;
@@ -17,11 +17,11 @@ export default async function handler(req, res) {
     switch (action) {
       case "quote":
         if (!tickers) return res.status(400).json({ error: "tickers required" });
-        url = `${BASE}/quote/${tickers}?apikey=${FMP_KEY}`;
+        url = `${BASE}/quote?symbol=${tickers}&apikey=${FMP_KEY}`;
         break;
       case "profile":
         if (!tickers) return res.status(400).json({ error: "tickers required" });
-        url = `${BASE}/profile/${tickers}?apikey=${FMP_KEY}`;
+        url = `${BASE}/profile?symbol=${tickers}&apikey=${FMP_KEY}`;
         break;
       case "actives":
         url = `${BASE}/stock_market/actives?apikey=${FMP_KEY}`;
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
         url = `${BASE}/stock_market/gainers?apikey=${FMP_KEY}`;
         break;
       default:
-        return res.status(400).json({ error: "Invalid action. Use: quote, profile, actives, gainers" });
+        return res.status(400).json({ error: "Invalid action" });
     }
 
     const resp = await fetch(url);
