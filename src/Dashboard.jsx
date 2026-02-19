@@ -62,7 +62,8 @@ const generateWhy = ({ volRatio, beta, daysToEarnings, move30dPct, rangePct }) =
   if (daysToEarnings != null && daysToEarnings <= 14) r.push(`Earnings in ${daysToEarnings}d`);
   if (Math.abs(move30dPct) >= 10) r.push(`${move30dPct > 0 ? "Up" : "Down"} ${Math.abs(move30dPct).toFixed(0)}% in 30d`);
   if (rangePct >= 50) r.push(`Wide 52w range (${rangePct.toFixed(0)}%)`);
-  return r.join(" · ") || "Active options candidate";
+  if (r.length === 0 && beta >= 1.2) r.push(`Moderate beta ${beta.toFixed(2)}`);
+  return r.join(" · ") || "Covered call candidate";
 };
 
 const enrichFromFMP = (q, p) => {
@@ -71,14 +72,15 @@ const enrichFromFMP = (q, p) => {
   const yearLow = q.yearLow || 0;
   const beta = p?.beta || 1;
   const volume = q.volume || 0;
-  const avgVolume = q.avgVolume || 1;
+  const avgVolume = p?.volAvg || q.avgVolume || 0;
   const priceAvg50 = q.priceAvg50 || price;
   const move30dPct = priceAvg50 > 0 ? ((price - priceAvg50) / priceAvg50) * 100 : 0;
   const rangePct = price > 0 ? ((yearHigh - yearLow) / price) * 100 : 0;
-  const volRatio = avgVolume > 0 ? volume / avgVolume : 1;
+  const volRatio = avgVolume > 0 ? volume / avgVolume : 0;
   let daysToEarnings = null;
-  if (q.earningsAnnouncement) {
-    const d = Math.ceil((new Date(q.earningsAnnouncement) - new Date()) / 86400000);
+  const ea = q.earningsAnnouncement || p?.earningsAnnouncement;
+  if (ea) {
+    const d = Math.ceil((new Date(ea) - new Date()) / 86400000);
     if (d >= 0) daysToEarnings = d;
   }
   const volScore = computeVolScore({ price, yearHigh, yearLow, beta, move30dPct, volume, avgVolume, daysToEarnings });
@@ -89,7 +91,7 @@ const enrichFromFMP = (q, p) => {
     beta: beta ? parseFloat(beta.toFixed(2)) : 0,
     move30d: `${move30dPct >= 0 ? "+" : ""}${move30dPct.toFixed(1)}%`,
     range52w: `${rangePct.toFixed(0)}%`,
-    volumeVsAvg: `${volRatio.toFixed(1)}x`,
+    volumeVsAvg: avgVolume > 0 ? `${volRatio.toFixed(1)}x` : "—",
     near52wHigh: yearHigh > 0 && price >= yearHigh * 0.9,
     nextEarnings: daysToEarnings != null && daysToEarnings <= 30 ? `${daysToEarnings}d` : "",
     marketCap: fmtMktCap(q.marketCap),
