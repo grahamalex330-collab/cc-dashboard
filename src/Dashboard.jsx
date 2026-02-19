@@ -433,10 +433,14 @@ export default function CoveredCallDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 1500,
-          system: `Stock screener. Search for 10 US stocks good for covered calls. Find stocks with high options volume, big recent moves, or upcoming earnings. Market cap >$2B, price >$10.
-Return ONLY JSON array: [{"ticker":"XXX","sector":"Tech","price":45.2,"marketCap":"12B","volScore":78,"volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","why":"High options volume after earnings beat"},...]
-volScore: 0-100 based on recent volatility, options activity, and catalyst proximity. JSON only, no other text.`,
+          max_tokens: 2000,
+          system: `You are a stock screener. Search the web for 10 US stocks that are good covered call candidates right now — look for high options volume, big recent price moves, or upcoming earnings. Market cap over $2B, price over $10.
+
+IMPORTANT: Your ENTIRE response must be a valid JSON array and nothing else. No explanation, no markdown, no text before or after. Just the JSON array.
+
+Format: [{"ticker":"XXX","sector":"Tech","price":45.2,"marketCap":"12B","volScore":78,"volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","why":"One sentence reason"}]
+
+volScore should be 0-100 estimating covered call attractiveness based on volatility, options activity, and catalysts.`,
           messages: [
             { role: "user", content: `Top 10 CC candidates now.${excludeNote} Date: ${new Date().toLocaleDateString()}.` }
           ],
@@ -444,6 +448,7 @@ volScore: 0-100 based on recent volatility, options activity, and catalyst proxi
         }),
       });
       const result = await response.json();
+      console.log("Scanner API result:", JSON.stringify(result).slice(0, 500));
       if (!response.ok) {
         setScannerError(result?.error?.message || `Error ${response.status}`);
         setScannerLoading(false);
@@ -453,9 +458,21 @@ volScore: 0-100 based on recent volatility, options activity, and catalyst proxi
       const clean = text.replace(/```json|```/g, "").trim();
       let parsed;
       try { parsed = JSON.parse(clean); } catch {
-        const m = clean.match(/\[[\s\S]*\]/);
-        if (m) parsed = JSON.parse(m[0]); else throw new Error("Could not parse response");
+        // Try to find JSON array in the response
+        const m = clean.match(/\[[\s\S]*?\](?=[^[\]]*$)/);
+        if (m) {
+          try { parsed = JSON.parse(m[0]); } catch {}
+        }
+        // If still no luck, try finding individual JSON objects and wrapping them
+        if (!parsed) {
+          const objects = [...clean.matchAll(/\{[^{}]*"ticker"[^{}]*\}/g)].map(m => {
+            try { return JSON.parse(m[0]); } catch { return null; }
+          }).filter(Boolean);
+          if (objects.length > 0) parsed = objects;
+        }
+        if (!parsed) throw new Error("Could not parse response");
       }
+      console.log("Scanner parsed:", parsed?.length, "stocks");
       if (Array.isArray(parsed) && parsed.length > 0) {
         setScannerData(parsed);
         setScannerTimestamp(new Date().toISOString());
