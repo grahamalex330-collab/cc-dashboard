@@ -17,11 +17,11 @@ export default async function handler(req, res) {
     switch (action) {
       case "quote":
         if (!tickers) return res.status(400).json({ error: "tickers required" });
-        url = `${BASE}/quote/${encodeURIComponent(tickers)}?apikey=${FMP_KEY}`;
+        url = `${BASE}/quote/${tickers}?apikey=${FMP_KEY}`;
         break;
       case "profile":
         if (!tickers) return res.status(400).json({ error: "tickers required" });
-        url = `${BASE}/profile/${encodeURIComponent(tickers)}?apikey=${FMP_KEY}`;
+        url = `${BASE}/profile/${tickers}?apikey=${FMP_KEY}`;
         break;
       case "actives":
         url = `${BASE}/stock_market/actives?apikey=${FMP_KEY}`;
