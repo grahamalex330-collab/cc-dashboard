@@ -493,7 +493,8 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
     if (tickers.length === 0) return;
     setWatchlistScoresLoading(true);
     try {
-      const results = await Promise.all(tickers.map(async (t) => {
+      // Step 1: FMP for base data (free, instant)
+      const fmpResults = await Promise.all(tickers.map(async (t) => {
         try {
           const [qResp, pResp] = await Promise.all([
             fetch(`/api/fmp?action=quote&tickers=${t}`),
@@ -504,11 +505,40 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
           return { ticker: t, q, p };
         } catch { return { ticker: t, q: null, p: null }; }
       }));
+      // Step 2: One Haiku call for earnings + volume (fields FMP free tier misses)
+      let aiData = {};
+      try {
+        const aiResp = await fetch("/api/claude", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 500,
+            system: `For each ticker, find next earnings date and current volume vs 30-day average volume ratio. Return ONLY JSON: {"AAPL":{"nextEarnings":"Apr 24","volumeVsAvg":"1.4x"},...} JSON only.`,
+            messages: [{ role: "user", content: `${tickers.join(",")}. Date: ${new Date().toLocaleDateString()}.` }],
+            tools: [{ type: "web_search_20250305", name: "web_search" }],
+          }),
+        });
+        const aiResult = await aiResp.json();
+        if (aiResp.ok) {
+          const text = (aiResult.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
+          const clean = text.replace(/```json|```/g, "").trim();
+          try { aiData = JSON.parse(clean); } catch {
+            const m = clean.match(/\{[\s\S]*\}/);
+            if (m) aiData = JSON.parse(m[0]);
+          }
+        }
+      } catch (err) { console.error("AI supplement error:", err); }
+      // Merge
       const updated = data.watchlist.map(w => {
-        const r = results.find(r => r.ticker === w.ticker.toUpperCase());
+        const r = fmpResults.find(r => r.ticker === w.ticker.toUpperCase());
         if (!r?.q) return w;
         const enriched = enrichFromFMP(r.q, r.p);
-        return { ...w, ...enriched, dateScored: today() };
+        const ai = aiData[w.ticker.toUpperCase()] || {};
+        return { ...w, ...enriched,
+          volumeVsAvg: ai.volumeVsAvg || enriched.volumeVsAvg,
+          nextEarnings: ai.nextEarnings || enriched.nextEarnings,
+          dateScored: today() };
       });
       setData(prev => ({ ...prev, watchlist: updated }));
     } catch (err) { console.error("Watchlist scores error:", err); }
@@ -2845,6 +2875,7 @@ function AddWatchlistForm({ onSubmit }) {
     setPreview(null);
     try {
       const t = ticker.toUpperCase();
+      // Step 1: FMP for base data
       const [qResp, pResp] = await Promise.all([
         fetch(`/api/fmp?action=quote&tickers=${t}`),
         fetch(`/api/fmp?action=profile&tickers=${t}`),
@@ -2853,7 +2884,30 @@ function AddWatchlistForm({ onSubmit }) {
       const p = await pResp.json().then(d => Array.isArray(d) && d[0] || null);
       if (!q || !q.price) throw new Error("Ticker not found");
       const enriched = enrichFromFMP(q, p);
-      setPreview({ ticker: t, ...enriched, dateAdded: today(), dateScored: today() });
+      // Step 2: Haiku for earnings + volume (non-blocking — show FMP data immediately, update when AI returns)
+      const base = { ticker: t, ...enriched, dateAdded: today(), dateScored: today() };
+      setPreview(base);
+      try {
+        const aiResp = await fetch("/api/claude", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 200,
+            system: `For the given ticker, find next earnings date and current volume vs 30-day average volume ratio. Return ONLY JSON: {"nextEarnings":"Apr 24","volumeVsAvg":"1.4x"} JSON only.`,
+            messages: [{ role: "user", content: `${t}. Date: ${new Date().toLocaleDateString()}.` }],
+            tools: [{ type: "web_search_20250305", name: "web_search" }],
+          }),
+        });
+        const aiResult = await aiResp.json();
+        if (aiResp.ok) {
+          const text = (aiResult.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
+          const clean = text.replace(/```json|```/g, "").trim();
+          let ai;
+          try { ai = JSON.parse(clean); } catch { const m = clean.match(/\{[\s\S]*\}/); if (m) ai = JSON.parse(m[0]); }
+          if (ai) setPreview(prev => prev ? { ...prev, volumeVsAvg: ai.volumeVsAvg || prev.volumeVsAvg, nextEarnings: ai.nextEarnings || prev.nextEarnings } : prev);
+        }
+      } catch (err) { console.error("AI supplement error:", err); }
     } catch (err) {
       console.error("Fetch vol error:", err);
       setError(err.message === "Ticker not found" ? "Ticker not found — check the symbol." : "Couldn't fetch data. You can add manually below.");
