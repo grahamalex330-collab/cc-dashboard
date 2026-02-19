@@ -427,30 +427,41 @@ export default function CoveredCallDashboard() {
         ...data.watchlist.map(w => w.ticker.toUpperCase()),
         ...data.positions.map(p => p.ticker.toUpperCase()),
       ]);
-      const [activesResp, gainersResp] = await Promise.all([
-        fetch("/api/fmp?action=actives"),
-        fetch("/api/fmp?action=gainers"),
+      // Popular large-cap stocks known for options activity
+      const universe = [
+        "AAPL","MSFT","NVDA","TSLA","AMZN","META","GOOG","AMD","NFLX","COIN",
+        "MARA","RIOT","SQ","SHOP","ROKU","SNAP","UBER","LYFT","PYPL","BA",
+        "DIS","NKE","SBUX","JPM","GS","MS","C","WFC","BAC","XOM",
+        "CVX","COP","OXY","MRNA","PFE","BABA","JD","NIO","SOFI","AFRM",
+        "CRWD","PANW","ZS","DKNG","WYNN","MGM","F","GM","AAL","DAL",
+        "UAL","ABNB","PINS","TTD","ENPH","SMCI","ARM","MU","INTC","ON"
+      ].filter(t => !existingTickers.has(t));
+      // Fetch in 2 batches (FMP limits comma-separated tickers)
+      const half = Math.ceil(universe.length / 2);
+      const [resp1, resp2] = await Promise.all([
+        fetch(`/api/fmp?action=quote&tickers=${universe.slice(0, half).join(",")}`),
+        fetch(`/api/fmp?action=quote&tickers=${universe.slice(half).join(",")}`),
       ]);
-      const actives = await activesResp.json();
-      const gainers = await gainersResp.json();
-      if (actives?.error || gainers?.error) throw new Error(actives?.error || gainers?.error);
-      const seen = new Set();
-      const candidates = [...(actives || []), ...(gainers || [])]
-        .filter(s => {
-          if (!s.symbol || seen.has(s.symbol) || existingTickers.has(s.symbol)) return false;
-          if (/[^A-Z]/.test(s.symbol) || s.symbol.length > 5) return false;
-          seen.add(s.symbol);
-          return (s.price || 0) >= 10 && (s.marketCap || 0) >= 2e9;
-        })
-        .slice(0, 20);
-      if (candidates.length === 0) { setScannerError("No matching stocks found"); setScannerLoading(false); return; }
-      const profileResp = await fetch(`/api/fmp?action=profile&tickers=${candidates.map(c => c.symbol).join(",")}`);
-      const profiles = await profileResp.json();
+      const q1 = await resp1.json();
+      const q2 = await resp2.json();
+      if (q1?.error || q2?.error) throw new Error(q1?.error || q2?.error);
+      const allQuotes = [...(Array.isArray(q1) ? q1 : []), ...(Array.isArray(q2) ? q2 : [])];
+      // Fetch profiles for beta/sector
+      const validTickers = allQuotes.filter(q => q.symbol && q.price >= 10 && (q.marketCap || 0) >= 2e9).map(q => q.symbol);
+      const profHalf = Math.ceil(validTickers.length / 2);
+      const [pResp1, pResp2] = await Promise.all([
+        fetch(`/api/fmp?action=profile&tickers=${validTickers.slice(0, profHalf).join(",")}`),
+        fetch(`/api/fmp?action=profile&tickers=${validTickers.slice(profHalf).join(",")}`),
+      ]);
+      const p1 = await pResp1.json();
+      const p2 = await pResp2.json();
       const profileMap = {};
-      (Array.isArray(profiles) ? profiles : []).forEach(p => { profileMap[p.symbol] = p; });
-      const results = candidates.map(s => {
-        const enriched = enrichFromFMP(s, profileMap[s.symbol]);
-        return { ticker: s.symbol, ...enriched };
+      [...(Array.isArray(p1) ? p1 : []), ...(Array.isArray(p2) ? p2 : [])].forEach(p => { profileMap[p.symbol] = p; });
+      const quoteMap = {};
+      allQuotes.forEach(q => { quoteMap[q.symbol] = q; });
+      const results = validTickers.map(t => {
+        const enriched = enrichFromFMP(quoteMap[t], profileMap[t]);
+        return { ticker: t, ...enriched };
       });
       results.sort((a, b) => (b.volScore || 0) - (a.volScore || 0));
       const top10 = results.slice(0, 10);
@@ -1362,7 +1373,7 @@ export default function CoveredCallDashboard() {
                 </div>
                 {scannerData && (
                   <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 rounded-b-xl">
-                    <p className="text-xs text-gray-400">Source: FMP · Most active + biggest gainers · Market cap &gt; $2B · Price &gt; $10 · Sorted by Volatility Score</p>
+                    <p className="text-xs text-gray-400">60 popular options stocks screened · Market cap &gt; $2B · Price &gt; $10 · Sorted by Volatility Score</p>
                   </div>
                 )}
               </Card>
