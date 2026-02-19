@@ -423,35 +423,47 @@ export default function CoveredCallDashboard() {
     setScannerLoading(true);
     setScannerError(null);
     try {
-      const existingTickers = new Set([
+      const existingTickers = [
         ...data.watchlist.map(w => w.ticker.toUpperCase()),
         ...data.positions.map(p => p.ticker.toUpperCase()),
-      ]);
-      // 30 popular options stocks — keeps API usage under 30 calls per scan
-      const universe = [
-        "AAPL","MSFT","NVDA","TSLA","AMZN","META","AMD","NFLX","COIN","MARA",
-        "SQ","SHOP","ROKU","SNAP","UBER","PYPL","BA","DIS","SOFI","AFRM",
-        "CRWD","DKNG","SMCI","ARM","MU","INTC","MRNA","NIO","AAL","ABNB"
-      ].filter(t => !existingTickers.has(t));
-      // Fetch all quotes individually in parallel
-      const quotePromises = universe.map(t =>
-        fetch(`/api/fmp?action=quote&tickers=${t}`).then(r => r.json()).then(d => (Array.isArray(d) && d[0]) || null).catch(() => null)
-      );
-      const quotes = (await Promise.all(quotePromises)).filter(Boolean);
-      const valid = quotes.filter(q => q.symbol && (q.price || 0) >= 10 && (q.marketCap || 0) >= 2e9);
-      const results = valid.map(q => {
-        const enriched = enrichFromFMP(q, null);
-        return { ticker: q.symbol, ...enriched };
+      ];
+      const excludeNote = existingTickers.length > 0 ? ` Exclude: ${existingTickers.join(", ")}.` : "";
+      const response = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1500,
+          system: `Stock screener. Search for 10 US stocks good for covered calls. Find stocks with high options volume, big recent moves, or upcoming earnings. Market cap >$2B, price >$10.
+Return ONLY JSON array: [{"ticker":"XXX","sector":"Tech","price":45.2,"marketCap":"12B","volScore":78,"volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","why":"High options volume after earnings beat"},...]
+volScore: 0-100 based on recent volatility, options activity, and catalyst proximity. JSON only, no other text.`,
+          messages: [
+            { role: "user", content: `Top 10 CC candidates now.${excludeNote} Date: ${new Date().toLocaleDateString()}.` }
+          ],
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        }),
       });
-      results.sort((a, b) => (b.volScore || 0) - (a.volScore || 0));
-      const top10 = results.slice(0, 10);
-      if (top10.length === 0) { setScannerError("No matching stocks found"); setScannerLoading(false); return; }
-      setScannerData(top10);
-      setScannerTimestamp(new Date().toISOString());
-      try { localStorage.setItem("cc_scanner_cache", JSON.stringify({ stocks: top10, timestamp: new Date().toISOString() })); } catch {}
+      const result = await response.json();
+      if (!response.ok) {
+        setScannerError(result?.error?.message || `Error ${response.status}`);
+        setScannerLoading(false);
+        return;
+      }
+      const text = (result.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
+      const clean = text.replace(/```json|```/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(clean); } catch {
+        const m = clean.match(/\[[\s\S]*\]/);
+        if (m) parsed = JSON.parse(m[0]); else throw new Error("Could not parse response");
+      }
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        setScannerData(parsed);
+        setScannerTimestamp(new Date().toISOString());
+        try { localStorage.setItem("cc_scanner_cache", JSON.stringify({ stocks: parsed, timestamp: new Date().toISOString() })); } catch {}
+      }
     } catch (err) {
       console.error("Scanner error:", err);
-      setScannerError(err.message || "Failed to load — try again");
+      setScannerError(err.message || "Failed to load");
     }
     setScannerLoading(false);
   }, [data.watchlist, data.positions]);
@@ -461,24 +473,40 @@ export default function CoveredCallDashboard() {
     if (tickers.length === 0) return;
     setWatchlistScoresLoading(true);
     try {
-      const quotePromises = tickers.map(t =>
-        fetch(`/api/fmp?action=quote&tickers=${t}`).then(r => r.json()).then(d => (Array.isArray(d) && d[0]) || null).catch(() => null)
-      );
-      const profilePromises = tickers.map(t =>
-        fetch(`/api/fmp?action=profile&tickers=${t}`).then(r => r.json()).then(d => (Array.isArray(d) && d[0]) || null).catch(() => null)
-      );
-      const [quotes, profiles] = await Promise.all([Promise.all(quotePromises), Promise.all(profilePromises)]);
-      const quoteMap = {};
-      quotes.forEach(q => { if (q?.symbol) quoteMap[q.symbol] = q; });
-      const profileMap = {};
-      profiles.forEach(p => { if (p?.symbol) profileMap[p.symbol] = p; });
-      const updated = data.watchlist.map(w => {
-        const q = quoteMap[w.ticker.toUpperCase()];
-        if (!q) return w;
-        const enriched = enrichFromFMP(q, profileMap[w.ticker.toUpperCase()]);
-        return { ...w, ...enriched, dateScored: today() };
+      const response = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1500,
+          system: `Volatility analyst. For each ticker, find: sector, price, beta, 30d move, 52w range %, volume vs avg, next earnings date. Compute volScore 0-100 based on range(25pts), momentum(20pts), beta(20pts), catalyst(20pts), volume(15pts).
+Return ONLY JSON: {"AAPL":{"sector":"Tech","price":185,"volScore":62,"beta":1.21,"move30d":"+8%","range52w":"32%","volumeVsAvg":"1.4x","nextEarnings":"Apr 24","why":"One sentence"},...}
+JSON only, no other text.`,
+          messages: [
+            { role: "user", content: `Score: ${tickers.join(", ")}. Date: ${new Date().toLocaleDateString()}.` }
+          ],
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        }),
       });
-      setData(prev => ({ ...prev, watchlist: updated }));
+      const result = await response.json();
+      if (!response.ok) { setWatchlistScoresLoading(false); return; }
+      const text = (result.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
+      const clean = text.replace(/```json|```/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(clean); } catch {
+        const m = clean.match(/\{[\s\S]*\}/);
+        if (m) parsed = JSON.parse(m[0]);
+      }
+      if (parsed && typeof parsed === "object") {
+        const updated = data.watchlist.map(w => {
+          const d = parsed[w.ticker.toUpperCase()];
+          if (!d) return w;
+          return { ...w, sector: d.sector || w.sector, price: d.price || w.price, volScore: d.volScore || 0,
+            beta: d.beta || 0, move30d: d.move30d || "", range52w: d.range52w || "",
+            volumeVsAvg: d.volumeVsAvg || "", nextEarnings: d.nextEarnings || "", why: d.why || "", dateScored: today() };
+        });
+        setData(prev => ({ ...prev, watchlist: updated }));
+      }
     } catch (err) { console.error("Watchlist scores error:", err); }
     setWatchlistScoresLoading(false);
   }, [data.watchlist]);
@@ -1354,7 +1382,7 @@ export default function CoveredCallDashboard() {
                 </div>
                 {scannerData && (
                   <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 rounded-b-xl">
-                    <p className="text-xs text-gray-400">30 popular options stocks screened · Market cap &gt; $2B · Price &gt; $10 · Sorted by Volatility Score · Add to watchlist for full analysis with beta &amp; sector</p>
+                    <p className="text-xs text-gray-400">AI-powered scan · Market cap &gt; $2B · Price &gt; $10 · Sorted by Volatility Score</p>
                   </div>
                 )}
               </Card>
@@ -2812,26 +2840,41 @@ function AddWatchlistForm({ onSubmit }) {
     setError("");
     setPreview(null);
     try {
-      const tickerUpper = ticker.toUpperCase();
-      const [quoteResp, profileResp] = await Promise.all([
-        fetch(`/api/fmp?action=quote&tickers=${tickerUpper}`),
-        fetch(`/api/fmp?action=profile&tickers=${tickerUpper}`),
-      ]);
-      const quotes = await quoteResp.json();
-      const profiles = await profileResp.json();
-      const q = Array.isArray(quotes) && quotes[0];
-      const p = Array.isArray(profiles) && profiles[0];
-      if (!q || !q.price) throw new Error("Ticker not found");
-      const enriched = enrichFromFMP(q, p);
+      const response = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 500,
+          system: `Volatility analyst. For the given ticker find: sector, price, beta, 30d move, 52w range %, volume vs avg, next earnings. Compute volScore 0-100 based on range(25pts), momentum(20pts), beta(20pts), catalyst(20pts), volume(15pts).
+Return ONLY JSON: {"sector":"Tech","price":185,"volScore":62,"beta":1.21,"move30d":"+8%","range52w":"32%","volumeVsAvg":"1.4x","nextEarnings":"Apr 24","why":"One sentence"}
+JSON only, no other text.`,
+          messages: [
+            { role: "user", content: `Analyze ${ticker.toUpperCase()}. Date: ${new Date().toLocaleDateString()}.` }
+          ],
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error?.message || "API error");
+      const text = (data.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
+      const clean = text.replace(/```json|```/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(clean); } catch {
+        const m = clean.match(/\{[\s\S]*\}/);
+        if (m) parsed = JSON.parse(m[0]); else throw new Error("Could not parse");
+      }
       setPreview({
-        ticker: tickerUpper,
-        ...enriched,
-        dateAdded: today(),
-        dateScored: today(),
+        ticker: ticker.toUpperCase(), sector: parsed.sector || "Unknown", price: parsed.price || 0,
+        volScore: parsed.volScore || 0, beta: parsed.beta || 0, move30d: parsed.move30d || "",
+        range52w: parsed.range52w || "", volumeVsAvg: parsed.volumeVsAvg || "",
+        nextEarnings: parsed.nextEarnings || "", why: parsed.why || "",
+        marketCap: parsed.marketCap || "", near52wHigh: parsed.near52wHigh || false,
+        dateAdded: today(), dateScored: today(),
       });
     } catch (err) {
       console.error("Fetch vol error:", err);
-      setError(err.message === "Ticker not found" ? "Ticker not found — check the symbol and try again." : "Couldn't fetch data. You can add manually below.");
+      setError(err.message || "Couldn't fetch data. You can add manually below.");
       setPreview({
         ticker: ticker.toUpperCase(), sector: "", price: 0, volScore: 0, beta: 0,
         move30d: "", range52w: "", volumeVsAvg: "", nextEarnings: "", why: "",
