@@ -614,7 +614,13 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
     if (c.status === "open") return sum;
     return sum + prem;
   }, 0);
-  const totalCapitalDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
+  const totalCapitalDeployed = activePositions.reduce((sum, p) => {
+    const t = p.ticker.toUpperCase();
+    const assignedShares = data.calls.filter(c => c.ticker.toUpperCase() === t && c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+    const priorShares = activePositions.filter(ap => ap.ticker === p.ticker && ap.id < p.id).reduce((s, ap) => s + ap.shares, 0);
+    const sharesAssignedFromThis = Math.min(Math.max(0, assignedShares - priorShares), p.shares);
+    return sum + p.costBasis * (p.shares - sharesAssignedFromThis);
+  }, 0);
   const activeCalls = openCalls.length;
 
   const upcomingEvents = data.events
@@ -712,21 +718,27 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
   const concentration = useMemo(() => {
     if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null };
     
-    // Group by ticker
+    // Group by ticker, subtracting assigned shares
     const grouped = {};
     activePositions.forEach(p => {
       const t = p.ticker.toUpperCase();
-      if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0 };
-      grouped[t].value += p.costBasis * p.shares;
+      const pCalls = data.calls.filter(c => c.ticker.toUpperCase() === t);
+      const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+      const currentShares = p.shares - assignedShares;
+      if (currentShares <= 0) return; // skip fully assigned
+      if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 };
+      grouped[t].value += p.costBasis * currentShares;
+      grouped[t].currentShares += currentShares;
     });
     
+    const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0);
     const positions = Object.values(grouped).map(g => ({
       ...g,
-      pct: totalCapitalDeployed > 0 ? g.value / totalCapitalDeployed : 0,
+      pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0,
     })).sort((a, b) => b.pct - a.pct);
 
     const maxPct = positions[0]?.pct || 0;
-    const uniqueTickers = [...new Set(activePositions.map(p => p.ticker.toUpperCase()))];
+    const uniqueTickers = positions.map(p => p.ticker.toUpperCase());
     const coveredCount = uniqueTickers.filter(t => data.calls.some(c => c.status === "open" && c.ticker.toUpperCase() === t)).length;
     const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0;
 
@@ -914,20 +926,23 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
                         {activePositions.map((p) => {
                           const pCalls = data.calls.filter((c) => c.ticker === p.ticker);
                           const pOpen = pCalls.filter((c) => c.status === "open").length;
-                          const pEarned = pCalls.filter(c => c.status !== "open").reduce((s, c) => {
-                            const net = netPrem(c);
-                            return s + net;
-                          }, 0);
+                          const totalEarned = pCalls.filter(c => c.status !== "open").reduce((s, c) => s + netPrem(c), 0);
+                          const totalTickerShares = activePositions.filter(ap => ap.ticker === p.ticker).reduce((s, ap) => s + ap.shares, 0);
+                          const pEarned = totalTickerShares > 0 ? totalEarned * (p.shares / totalTickerShares) : 0;
                           const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
-                          const currentShares = p.shares - assignedShares;
+                          const totalTickerAssigned = assignedShares;
+                          // Only show assigned on last position row to avoid duplication
+                          const priorShares = activePositions.filter(ap => ap.ticker === p.ticker && ap.id < p.id).reduce((s, ap) => s + ap.shares, 0);
+                          const sharesAssignedFromThis = Math.min(Math.max(0, totalTickerAssigned - priorShares), p.shares);
+                          const currentShares = p.shares - sharesAssignedFromThis;
                           return (
                             <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50">
                               <td className="px-5 py-3 font-semibold text-gray-900">{p.ticker}</td>
                               <td className="px-5 py-3">
-                                {assignedShares > 0 ? (
+                                {sharesAssignedFromThis > 0 ? (
                                   <div>
                                     <span className="font-medium">{currentShares}</span>
-                                    <span className="text-xs text-orange-600 ml-1">({assignedShares} called)</span>
+                                    <span className="text-xs text-orange-600 ml-1">({sharesAssignedFromThis} called)</span>
                                   </div>
                                 ) : p.shares}
                               </td>
@@ -1104,13 +1119,16 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
                     <tbody>
                       {activePositions.map((p) => {
                         const pCalls = data.calls.filter((c) => c.ticker === p.ticker);
-                        const earned = pCalls.filter(c => c.status !== "open").reduce((s, c) => {
-                          const net = netPrem(c);
-                          return s + net;
-                        }, 0);
-                        const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+                        const totalEarned = pCalls.filter(c => c.status !== "open").reduce((s, c) => s + netPrem(c), 0);
+                        const totalTickerShares = activePositions.filter(ap => ap.ticker === p.ticker).reduce((s, ap) => s + ap.shares, 0);
+                        const earned = totalTickerShares > 0 ? totalEarned * (p.shares / totalTickerShares) : 0;
+                        const totalTickerAssigned = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+                        const totalTickerAssignmentProceeds = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.strike * c.contracts * 100, 0);
+                        // Distribute assigned shares across position rows in order
+                        const priorShares = activePositions.filter(ap => ap.ticker === p.ticker && ap.id < p.id).reduce((s, ap) => s + ap.shares, 0);
+                        const assignedShares = Math.min(Math.max(0, totalTickerAssigned - priorShares), p.shares);
                         const currentShares = p.shares - assignedShares;
-                        const assignmentProceeds = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.strike * c.contracts * 100, 0);
+                        const assignmentProceeds = totalTickerShares > 0 ? totalTickerAssignmentProceeds * (p.shares / totalTickerShares) : 0;
                         const effectiveBasis = currentShares > 0 ? (p.costBasis * p.shares - earned - assignmentProceeds) / currentShares : 0;
                         return (
                           <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50">
