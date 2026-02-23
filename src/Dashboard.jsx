@@ -614,6 +614,7 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
     if (c.status === "open") return sum;
     return sum + prem;
   }, 0);
+  const totalCapitalEverDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
   const totalCapitalDeployed = activePositions.reduce((sum, p) => {
     const t = p.ticker.toUpperCase();
     const assignedShares = data.calls.filter(c => c.ticker.toUpperCase() === t && c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
@@ -685,13 +686,13 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
 
   // Annualized yield
   const annualizedYield = useMemo(() => {
-    if (totalCapitalDeployed === 0) return 0;
+    if (totalCapitalEverDeployed === 0) return 0;
     const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort();
     if (allDates.length === 0) return 0;
     const daysSinceFirst = daysBetween(allDates[0], today());
     if (daysSinceFirst <= 0) return 0;
-    return (totalPremiumCollected / totalCapitalDeployed) * (365 / daysSinceFirst);
-  }, [totalPremiumCollected, totalCapitalDeployed, data.calls]);
+    return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst);
+  }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
 
   // Weekly P&L summary
   const weeklyPL = useMemo(() => {
