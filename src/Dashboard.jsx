@@ -918,10 +918,19 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
                             const net = netPrem(c);
                             return s + net;
                           }, 0);
+                          const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+                          const currentShares = p.shares - assignedShares;
                           return (
                             <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50">
                               <td className="px-5 py-3 font-semibold text-gray-900">{p.ticker}</td>
-                              <td className="px-5 py-3">{p.shares}</td>
+                              <td className="px-5 py-3">
+                                {assignedShares > 0 ? (
+                                  <div>
+                                    <span className="font-medium">{currentShares}</span>
+                                    <span className="text-xs text-orange-600 ml-1">({assignedShares} called)</span>
+                                  </div>
+                                ) : p.shares}
+                              </td>
                               <td className="px-5 py-3">{formatCurrency(p.costBasis)}</td>
                               <td className="px-5 py-3">{formatCurrency(p.costBasis * p.shares)}</td>
                               <td className="px-5 py-3">{pOpen > 0 ? <span className="text-blue-700 font-medium">{pOpen} open</span> : <span className="text-gray-400">—</span>}</td>
@@ -1099,17 +1108,32 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
                           const net = netPrem(c);
                           return s + net;
                         }, 0);
-                        const effectiveBasis = p.shares > 0 ? (p.costBasis * p.shares - earned) / p.shares : p.costBasis;
+                        const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+                        const currentShares = p.shares - assignedShares;
+                        const assignmentProceeds = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.strike * c.contracts * 100, 0);
+                        const effectiveBasis = currentShares > 0 ? (p.costBasis * p.shares - earned - assignmentProceeds) / currentShares : 0;
                         return (
                           <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50">
                             <td className="px-5 py-3 font-bold text-gray-900">{p.ticker}</td>
-                            <td className="px-5 py-3">{p.shares}</td>
+                            <td className="px-5 py-3">
+                              {assignedShares > 0 ? (
+                                <div>
+                                  <span className="font-medium">{currentShares}</span>
+                                  <span className="text-xs text-orange-600 ml-1">({assignedShares} assigned)</span>
+                                </div>
+                              ) : p.shares}
+                            </td>
                             <td className="px-5 py-3">{formatCurrency(p.costBasis)}</td>
                             <td className="px-5 py-3 text-gray-500">{p.dateAcquired}</td>
                             <td className="px-5 py-3">{formatCurrency(p.costBasis * p.shares)}</td>
                             <td className="px-5 py-3">{pCalls.length}</td>
-                            <td className="px-5 py-3 text-green-700 font-medium">{formatCurrency(earned)}</td>
-                            <td className="px-5 py-3 font-medium">{formatCurrency(effectiveBasis)}</td>
+                            <td className="px-5 py-3">
+                              <span className="text-green-700 font-medium">{formatCurrency(earned)}</span>
+                              {assignmentProceeds > 0 && (
+                                <div className="text-xs text-orange-600">+ {formatCurrency(assignmentProceeds)} assigned</div>
+                              )}
+                            </td>
+                            <td className="px-5 py-3 font-medium">{currentShares > 0 ? formatCurrency(effectiveBasis) : <span className="text-orange-600 text-xs">Fully assigned</span>}</td>
                             <td className="px-5 py-3">
                               <div className="flex gap-1">
                                 <Btn variant="secondary" size="sm" onClick={() => { setWriteCallTicker(p.ticker); setShowWriteCall(true); }}>Write Call</Btn>
