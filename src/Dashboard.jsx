@@ -30,6 +30,55 @@ const GLOSSARY = {
   range52w: "The stock's 52-week price range expressed as a percentage of current price. A wider range indicates higher historical volatility. Stocks with 50%+ range tend to have richer option premiums.",
 };
 
+// ── Call-to-position matching ──
+// Assigns calls to the correct position based on ticker + date.
+// For tickers with a single position at call time: direct match.
+// For tickers with multiple positions at call time (e.g., multiple HOOD lots):
+//   the call is assigned to ALL positions that existed at call time.
+// Use callsForPositionWeighted() to get premium weighted by share proportion.
+const callsForPosition = (position, allPositions, allCalls) => {
+  const t = position.ticker.toUpperCase();
+  const tickerPositions = allPositions
+    .filter(p => p.ticker.toUpperCase() === t)
+    .sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
+  const tickerCalls = allCalls.filter(c => c.ticker.toUpperCase() === t);
+  return tickerCalls.filter(c => {
+    const callDate = c.dateOpened || "";
+    // Find all positions that existed when this call was written
+    const activeAtTime = tickerPositions.filter(tp => (tp.dateAcquired || "") <= callDate);
+    if (activeAtTime.length === 0) return tickerPositions[0]?.id === position.id; // fallback to earliest
+    // If only one position existed, assign to it
+    if (activeAtTime.length === 1) return activeAtTime[0].id === position.id;
+    // Multiple positions existed — assign to all of them (premium will be split by weight)
+    return activeAtTime.some(tp => tp.id === position.id);
+  });
+};
+
+// Get weighted premium for a position (splits shared calls by share proportion)
+const weightedPremium = (position, allPositions, allCalls) => {
+  const t = position.ticker.toUpperCase();
+  const tickerPositions = allPositions
+    .filter(p => p.ticker.toUpperCase() === t)
+    .sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
+  const tickerCalls = allCalls.filter(c => c.ticker.toUpperCase() === t);
+  let total = 0;
+  tickerCalls.filter(c => c.status !== "open").forEach(c => {
+    const callDate = c.dateOpened || "";
+    const activeAtTime = tickerPositions.filter(tp => (tp.dateAcquired || "") <= callDate);
+    if (activeAtTime.length === 0) {
+      if (tickerPositions[0]?.id === position.id) total += netPrem(c);
+    } else if (activeAtTime.length === 1) {
+      if (activeAtTime[0].id === position.id) total += netPrem(c);
+    } else {
+      const totalShares = activeAtTime.reduce((s, tp) => s + tp.shares, 0);
+      if (totalShares > 0 && activeAtTime.some(tp => tp.id === position.id)) {
+        total += netPrem(c) * (position.shares / totalShares);
+      }
+    }
+  });
+  return total;
+};
+
 // ── FMP helpers ──
 const computeVolScore = ({ price, yearHigh, yearLow, beta, move30dPct, volume, avgVolume, daysToEarnings }) => {
   const rangePct = price > 0 ? ((yearHigh - yearLow) / price) * 100 : 0;
@@ -616,11 +665,9 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
   }, 0);
   const totalCapitalEverDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
   const totalCapitalDeployed = activePositions.reduce((sum, p) => {
-    const t = p.ticker.toUpperCase();
-    const assignedShares = data.calls.filter(c => c.ticker.toUpperCase() === t && c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
-    const priorShares = activePositions.filter(ap => ap.ticker === p.ticker && ap.id < p.id).reduce((s, ap) => s + ap.shares, 0);
-    const sharesAssignedFromThis = Math.min(Math.max(0, assignedShares - priorShares), p.shares);
-    return sum + p.costBasis * (p.shares - sharesAssignedFromThis);
+    const pCalls = callsForPosition(p, activePositions, data.calls);
+    const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+    return sum + p.costBasis * (p.shares - assignedShares);
   }, 0);
   const activeCalls = openCalls.length;
 
@@ -723,7 +770,7 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
     const grouped = {};
     activePositions.forEach(p => {
       const t = p.ticker.toUpperCase();
-      const pCalls = data.calls.filter(c => c.ticker.toUpperCase() === t);
+      const pCalls = callsForPosition(p, activePositions, data.calls);
       const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
       const currentShares = p.shares - assignedShares;
       if (currentShares <= 0) return; // skip fully assigned
@@ -925,25 +972,19 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
                       </thead>
                       <tbody>
                         {activePositions.map((p) => {
-                          const pCalls = data.calls.filter((c) => c.ticker === p.ticker);
+                          const pCalls = callsForPosition(p, activePositions, data.calls);
                           const pOpen = pCalls.filter((c) => c.status === "open").length;
-                          const totalEarned = pCalls.filter(c => c.status !== "open").reduce((s, c) => s + netPrem(c), 0);
-                          const totalTickerShares = activePositions.filter(ap => ap.ticker === p.ticker).reduce((s, ap) => s + ap.shares, 0);
-                          const pEarned = totalTickerShares > 0 ? totalEarned * (p.shares / totalTickerShares) : 0;
+                          const pEarned = weightedPremium(p, activePositions, data.calls);
                           const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
-                          const totalTickerAssigned = assignedShares;
-                          // Only show assigned on last position row to avoid duplication
-                          const priorShares = activePositions.filter(ap => ap.ticker === p.ticker && ap.id < p.id).reduce((s, ap) => s + ap.shares, 0);
-                          const sharesAssignedFromThis = Math.min(Math.max(0, totalTickerAssigned - priorShares), p.shares);
-                          const currentShares = p.shares - sharesAssignedFromThis;
+                          const currentShares = p.shares - assignedShares;
                           return (
                             <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50">
                               <td className="px-5 py-3 font-semibold text-gray-900">{p.ticker}</td>
                               <td className="px-5 py-3">
-                                {sharesAssignedFromThis > 0 ? (
+                                {assignedShares > 0 ? (
                                   <div>
                                     <span className="font-medium">{currentShares}</span>
-                                    <span className="text-xs text-orange-600 ml-1">({sharesAssignedFromThis} called)</span>
+                                    <span className="text-xs text-orange-600 ml-1">({assignedShares} called)</span>
                                   </div>
                                 ) : p.shares}
                               </td>
@@ -1119,18 +1160,17 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
                     </thead>
                     <tbody>
                       {activePositions.map((p) => {
-                        const pCalls = data.calls.filter((c) => c.ticker === p.ticker);
-                        const totalEarned = pCalls.filter(c => c.status !== "open").reduce((s, c) => s + netPrem(c), 0);
-                        const totalTickerShares = activePositions.filter(ap => ap.ticker === p.ticker).reduce((s, ap) => s + ap.shares, 0);
-                        const earned = totalTickerShares > 0 ? totalEarned * (p.shares / totalTickerShares) : 0;
-                        const totalTickerAssigned = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
-                        const totalTickerAssignmentProceeds = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.strike * c.contracts * 100, 0);
-                        // Distribute assigned shares across position rows in order
-                        const priorShares = activePositions.filter(ap => ap.ticker === p.ticker && ap.id < p.id).reduce((s, ap) => s + ap.shares, 0);
-                        const assignedShares = Math.min(Math.max(0, totalTickerAssigned - priorShares), p.shares);
+                        const pCalls = callsForPosition(p, activePositions, data.calls);
+                        const earned = weightedPremium(p, activePositions, data.calls);
+                        const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
                         const currentShares = p.shares - assignedShares;
-                        const assignmentProceeds = totalTickerShares > 0 ? totalTickerAssignmentProceeds * (p.shares / totalTickerShares) : 0;
-                        const effectiveBasis = currentShares > 0 ? (p.costBasis * p.shares - earned - assignmentProceeds) / currentShares : 0;
+                        const assignmentProceeds = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.strike * c.contracts * 100, 0);
+                        // Weight assignment proceeds same as premium for multi-lot positions
+                        const t = p.ticker.toUpperCase();
+                        const tickerPositions = activePositions.filter(ap => ap.ticker.toUpperCase() === t);
+                        const weightedAssignmentProceeds = tickerPositions.length > 1 && assignedShares === 0
+                          ? 0 : assignmentProceeds;
+                        const effectiveBasis = currentShares > 0 ? (p.costBasis * p.shares - earned - weightedAssignmentProceeds) / currentShares : 0;
                         return (
                           <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50">
                             <td className="px-5 py-3 font-bold text-gray-900">{p.ticker}</td>
