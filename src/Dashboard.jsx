@@ -298,67 +298,7 @@ export default function CoveredCallDashboard() {
  
   if (loading) { return (<div className="min-h-screen bg-gray-50 flex items-center justify-center"><div className="animate-pulse text-gray-400">Loading dashboard...</div></div>); }
  
-// THIS IS THE TOP SECTION. The return() JSX and form components below are
-// IDENTICAL to your current file. Replace everything above this comment
-// in your GitHub file, keeping everything from "return (" onwards as-is.
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-md w-full space-y-6">
-          <div className="text-center">
-            <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mx-auto mb-4"><TrendingUp className="text-white" size={24} /></div>
-            <h1 className="text-2xl font-bold text-gray-900">Covered Call Dashboard</h1>
-            <p className="text-sm text-gray-500 mt-2">Enter a household code to get started. Anyone with the same code shares the same data.</p>
-          </div>
-          <div className="space-y-3">
-            <label className="block text-sm font-medium text-gray-700">Household Code</label>
-            <input type="text" value={codeInput} onChange={(e) => setCodeInput(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} onKeyDown={(e) => e.key === "Enter" && handleJoin()} placeholder="e.g. smith-family" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent text-lg" autoFocus />
-            <p className="text-xs text-gray-400">Letters, numbers, and dashes only. Share this code with your partner so you see the same dashboard.</p>
-          </div>
-          <button onClick={handleJoin} disabled={codeInput.trim().length < 2} className="w-full py-3 bg-gray-900 text-white rounded-xl font-medium hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">Enter Dashboard</button>
-        </div>
-      </div>
-    );
-  }
 
-  const nextId = () => data.nextId;
-  const addPosition = (pos) => { const id = data.nextId; save({ ...data, positions: [...data.positions, { ...pos, id }], nextId: id + 1 }); };
-  const updatePosition = (id, updates) => save({ ...data, positions: data.positions.map((p) => (p.id === id ? { ...p, ...updates } : p)) });
-  const removePosition = (id) => save({ ...data, positions: data.positions.filter((p) => p.id !== id) });
-  const addCall = (call) => { const id = data.nextId; save({ ...data, calls: [...data.calls, { ...call, id, status: "open" }], nextId: id + 1 }); };
-  const addPastCall = (call) => { const id = data.nextId; save({ ...data, calls: [...data.calls, { ...call, id }], nextId: id + 1 }); };
-  const updateCall = (id, updates) => save({ ...data, calls: data.calls.map(c => c.id === id ? { ...c, ...updates } : c) });
-  const closeCall = (id, action, closePrice = 0) => save({ ...data, calls: data.calls.map((c) => c.id === id ? { ...c, status: action, dateClosed: today(), closePrice: parseFloat(closePrice) || 0 } : c) });
-  const addWatchlistItem = (item) => { const id = data.nextId; save({ ...data, watchlist: [...data.watchlist, { ...item, id }], nextId: id + 1 }); };
-  const removeWatchlistItem = (id) => save({ ...data, watchlist: data.watchlist.filter((w) => w.id !== id) });
-  const addEvent = (event) => { const id = data.nextId; save({ ...data, events: [...data.events, { ...event, id }], nextId: id + 1 }); };
-  const removeEvent = (id) => save({ ...data, events: data.events.filter((e) => e.id !== id) });
-
-  const activePositions = data.positions;
-  const openCalls = data.calls.filter((c) => c.status === "open");
-  const closedCalls = data.calls.filter((c) => c.status !== "open");
-  const totalPremiumCollected = data.calls.reduce((sum, c) => { const prem = grossPrem(c); if (c.status === "closed") return sum + prem - closeCostOf(c); if (c.status === "open") return sum; return sum + prem; }, 0);
-  const totalCapitalEverDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
-  const totalCapitalDeployed = activePositions.reduce((sum, p) => { const pCalls = callsForPosition(p, activePositions, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); return sum + p.costBasis * (p.shares - assignedShares); }, 0);
-  const activeCalls = openCalls.length;
-  const upcomingEvents = data.events.filter((e) => new Date(e.date) >= new Date(today())).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 8);
-  const premiumByWeek = useMemo(() => { const weeks = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const [y, m, d] = (dateStr || "").split("-").map(Number); if (!y) return; const dt = new Date(y, m - 1, d); const weekStart = new Date(dt); weekStart.setDate(dt.getDate() - dt.getDay()); const key = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`; weeks[key] = (weeks[key] || 0) + netPrem(c); }); const sorted = Object.entries(weeks).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([week, amount]) => { cum += amount; return { week: week.slice(5), amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
-  const premiumByMonth = useMemo(() => { const months = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const key = (dateStr || "").slice(0, 7); if (!key || key.length < 7) return; months[key] = (months[key] || 0) + netPrem(c); }); const sorted = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([month, amount]) => { cum += amount; return { month, amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
-  const taxData = useMemo(() => data.calls.filter(c => c.status !== "open").map((c) => { const held = daysBetween(c.dateOpened, c.dateClosed || today()); const net = netPrem(c); const treatment = held > 365 ? "Long-term" : "Short-term"; const isLoss = net < 0; const nearbyTrades = data.calls.filter((o) => o.id !== c.id && o.ticker === c.ticker && Math.abs(daysBetween(c.dateClosed || today(), o.dateOpened)) <= 30); return { ...c, held, net, treatment, washSaleRisk: isLoss && nearbyTrades.length > 0 }; }), [data.calls]);
-  const annualizedYield = useMemo(() => { if (totalCapitalEverDeployed === 0) return 0; const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return 0; const daysSinceFirst = daysBetween(allDates[0], today()); if (daysSinceFirst <= 0) return 0; return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst); }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
-  const weeklyPL = useMemo(() => { const now = new Date(); const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`; const thisWeekCalls = data.calls.filter(c => { if (c.status === "open") return false; return (c.dateClosed || c.dateOpened) >= startKey; }); return { premium: thisWeekCalls.reduce((sum, c) => sum + netPrem(c), 0), trades: thisWeekCalls.length, callsWritten: data.calls.filter(c => (c.dateOpened || "") >= startKey).length }; }, [data.calls]);
-  const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const pCalls = callsForPosition(p, activePositions, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => data.calls.some(c => c.status === "open" && c.ticker.toUpperCase() === t)).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio — heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of portfolio — consider diversifying.` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
-
-  if (loading) { return (<div className="min-h-screen bg-gray-50 flex items-center justify-center"><div className="animate-pulse text-gray-400">Loading dashboard...</div></div>); }
-
-// ═══════════════════════════════════════════════════════════════════════
-// STOP HERE — Copy everything from "return (" to the end of your
-// original Dashboard.jsx file and paste it below this line.
-// That includes the main JSX return and ALL form components
-// (TradeLogTable, EditCallForm, LogPastTradeForm, AddPositionForm,
-// EditPositionForm, WriteCallForm, CloseCallForm, AddEventForm,
-// ImportDataForm, AddWatchlistForm).
-// Those components have ZERO changes — just paste them as-is.
-// ═══════════════════════════════════════════════════════════════════════
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
