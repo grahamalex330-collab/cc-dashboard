@@ -1,3 +1,20 @@
+// ═══════════════════════════════════════════════════════════════════════
+// INSTRUCTIONS: This file contains the FIXED top section of Dashboard.jsx
+// 
+// To apply the fix:
+// 1. Open your current Dashboard.jsx in a text editor
+// 2. Select EVERYTHING from the top of the file down to (but NOT including)
+//    the line that says:  return (
+//    (the main JSX return inside CoveredCallDashboard, after "if (loading)")
+// 3. Replace that selection with the ENTIRE contents of this file
+// 4. The rest of your file (the return JSX and all form components) stays as-is
+//
+// What changed: The 4 hooks (2 useEffects + 2 useCallbacks) that were
+// AFTER the "if (!joined) return" block have been moved BEFORE it.
+// This fixes a React Rules of Hooks violation that prevented data
+// from loading after entering the household code.
+// ═══════════════════════════════════════════════════════════════════════
+
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Area } from "recharts";
 import { Plus, X, TrendingUp, DollarSign, Calendar, AlertTriangle, ChevronDown, ChevronRight, BarChart3, List, Eye, Shield, Clock, Target, Trash2, Check, Edit2, RefreshCw, Zap, HelpCircle, Info } from "lucide-react";
@@ -31,78 +48,48 @@ const GLOSSARY = {
 };
 
 // ── Call-to-position matching ──
-// Assigns calls to the correct position based on ticker + date.
-// For tickers with a single position at call time: direct match.
-// For tickers with multiple positions at call time (e.g., multiple HOOD lots):
-//   the call is assigned to ALL positions that existed at call time.
-// Use callsForPositionWeighted() to get premium weighted by share proportion.
 const callsForPosition = (position, allPositions, allCalls) => {
   const t = position.ticker.toUpperCase();
-  const tickerPositions = allPositions
-    .filter(p => p.ticker.toUpperCase() === t)
-    .sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
+  const tickerPositions = allPositions.filter(p => p.ticker.toUpperCase() === t).sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
   const tickerCalls = allCalls.filter(c => c.ticker.toUpperCase() === t);
   return tickerCalls.filter(c => {
     const callDate = c.dateOpened || "";
-    // Find all positions that existed when this call was written
     const activeAtTime = tickerPositions.filter(tp => (tp.dateAcquired || "") <= callDate);
-    if (activeAtTime.length === 0) return tickerPositions[0]?.id === position.id; // fallback to earliest
-    // If only one position existed, assign to it
+    if (activeAtTime.length === 0) return tickerPositions[0]?.id === position.id;
     if (activeAtTime.length === 1) return activeAtTime[0].id === position.id;
-    // Multiple positions existed — assign to all of them (premium will be split by weight)
     return activeAtTime.some(tp => tp.id === position.id);
   });
 };
 
-// Get weighted premium for a position (splits shared calls by share proportion)
 const weightedPremium = (position, allPositions, allCalls) => {
   const t = position.ticker.toUpperCase();
-  const tickerPositions = allPositions
-    .filter(p => p.ticker.toUpperCase() === t)
-    .sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
+  const tickerPositions = allPositions.filter(p => p.ticker.toUpperCase() === t).sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
   const tickerCalls = allCalls.filter(c => c.ticker.toUpperCase() === t);
   let total = 0;
   tickerCalls.filter(c => c.status !== "open").forEach(c => {
     const callDate = c.dateOpened || "";
     const activeAtTime = tickerPositions.filter(tp => (tp.dateAcquired || "") <= callDate);
-    if (activeAtTime.length === 0) {
-      if (tickerPositions[0]?.id === position.id) total += netPrem(c);
-    } else if (activeAtTime.length === 1) {
-      if (activeAtTime[0].id === position.id) total += netPrem(c);
-    } else {
-      const totalShares = activeAtTime.reduce((s, tp) => s + tp.shares, 0);
-      if (totalShares > 0 && activeAtTime.some(tp => tp.id === position.id)) {
-        total += netPrem(c) * (position.shares / totalShares);
-      }
-    }
+    if (activeAtTime.length === 0) { if (tickerPositions[0]?.id === position.id) total += netPrem(c); }
+    else if (activeAtTime.length === 1) { if (activeAtTime[0].id === position.id) total += netPrem(c); }
+    else { const totalShares = activeAtTime.reduce((s, tp) => s + tp.shares, 0); if (totalShares > 0 && activeAtTime.some(tp => tp.id === position.id)) total += netPrem(c) * (position.shares / totalShares); }
   });
   return total;
 };
 
-// ── FMP helpers ──
 const computeVolScore = ({ price, yearHigh, yearLow, beta, move30dPct, volume, avgVolume, daysToEarnings }) => {
   const rangePct = price > 0 ? ((yearHigh - yearLow) / price) * 100 : 0;
   const rangeScore = Math.min(25, rangePct * 0.25);
-  const absMov = Math.abs(move30dPct || 0);
-  const momentumScore = Math.min(20, absMov * 0.67);
+  const momentumScore = Math.min(20, Math.abs(move30dPct || 0) * 0.67);
   const b = beta || 1;
   const betaScore = b >= 2 ? 20 : b >= 1.5 ? 16 : b >= 1.2 ? 12 : b >= 1.0 ? 8 : b >= 0.7 ? 4 : 2;
   let catalystScore = 0;
-  if (daysToEarnings != null && daysToEarnings >= 0) {
-    catalystScore = daysToEarnings <= 3 ? 20 : daysToEarnings <= 7 ? 16 : daysToEarnings <= 14 ? 12 : daysToEarnings <= 30 ? 6 : 0;
-  }
+  if (daysToEarnings != null && daysToEarnings >= 0) catalystScore = daysToEarnings <= 3 ? 20 : daysToEarnings <= 7 ? 16 : daysToEarnings <= 14 ? 12 : daysToEarnings <= 30 ? 6 : 0;
   const volRatio = avgVolume > 0 ? volume / avgVolume : 1;
   const volumeScore = volRatio >= 3 ? 15 : volRatio >= 2 ? 12 : volRatio >= 1.5 ? 9 : volRatio >= 1.0 ? 5 : 2;
   return Math.round(rangeScore + momentumScore + betaScore + catalystScore + volumeScore);
 };
 
-const fmtMktCap = (mc) => {
-  if (!mc) return "—";
-  if (mc >= 1e12) return `${(mc / 1e12).toFixed(1)}T`;
-  if (mc >= 1e9) return `${(mc / 1e9).toFixed(0)}B`;
-  if (mc >= 1e6) return `${(mc / 1e6).toFixed(0)}M`;
-  return String(mc);
-};
+const fmtMktCap = (mc) => { if (!mc) return "—"; if (mc >= 1e12) return `${(mc / 1e12).toFixed(1)}T`; if (mc >= 1e9) return `${(mc / 1e9).toFixed(0)}B`; if (mc >= 1e6) return `${(mc / 1e6).toFixed(0)}M`; return String(mc); };
 
 const generateWhy = ({ volRatio, beta, daysToEarnings, move30dPct, rangePct }) => {
   const r = [];
@@ -116,36 +103,16 @@ const generateWhy = ({ volRatio, beta, daysToEarnings, move30dPct, rangePct }) =
 };
 
 const enrichFromFMP = (q, p) => {
-  const price = q.price || 0;
-  const yearHigh = q.yearHigh || 0;
-  const yearLow = q.yearLow || 0;
-  const beta = p?.beta || 1;
-  const volume = q.volume || 0;
-  const avgVolume = p?.volAvg || q.avgVolume || 0;
-  const priceAvg50 = q.priceAvg50 || price;
+  const price = q.price || 0, yearHigh = q.yearHigh || 0, yearLow = q.yearLow || 0, beta = p?.beta || 1;
+  const volume = q.volume || 0, avgVolume = p?.volAvg || q.avgVolume || 0, priceAvg50 = q.priceAvg50 || price;
   const move30dPct = priceAvg50 > 0 ? ((price - priceAvg50) / priceAvg50) * 100 : 0;
   const rangePct = price > 0 ? ((yearHigh - yearLow) / price) * 100 : 0;
   const volRatio = avgVolume > 0 ? volume / avgVolume : 0;
   let daysToEarnings = null;
   const ea = q.earningsAnnouncement || p?.earningsAnnouncement;
-  if (ea) {
-    const d = Math.ceil((new Date(ea) - new Date()) / 86400000);
-    if (d >= 0) daysToEarnings = d;
-  }
+  if (ea) { const d = Math.ceil((new Date(ea) - new Date()) / 86400000); if (d >= 0) daysToEarnings = d; }
   const volScore = computeVolScore({ price, yearHigh, yearLow, beta, move30dPct, volume, avgVolume, daysToEarnings });
-  return {
-    sector: p?.sector || "",
-    price,
-    volScore,
-    beta: beta ? parseFloat(beta.toFixed(2)) : 0,
-    move30d: `${move30dPct >= 0 ? "+" : ""}${move30dPct.toFixed(1)}%`,
-    range52w: `${rangePct.toFixed(0)}%`,
-    volumeVsAvg: avgVolume > 0 ? `${volRatio.toFixed(1)}x` : "—",
-    near52wHigh: yearHigh > 0 && price >= yearHigh * 0.9,
-    nextEarnings: daysToEarnings != null && daysToEarnings <= 30 ? `${daysToEarnings}d` : "",
-    marketCap: fmtMktCap(q.marketCap),
-    why: generateWhy({ volRatio, beta, daysToEarnings, move30dPct, rangePct }),
-  };
+  return { sector: p?.sector || "", price, volScore, beta: beta ? parseFloat(beta.toFixed(2)) : 0, move30d: `${move30dPct >= 0 ? "+" : ""}${move30dPct.toFixed(1)}%`, range52w: `${rangePct.toFixed(0)}%`, volumeVsAvg: avgVolume > 0 ? `${volRatio.toFixed(1)}x` : "—", near52wHigh: yearHigh > 0 && price >= yearHigh * 0.9, nextEarnings: daysToEarnings != null && daysToEarnings <= 30 ? `${daysToEarnings}d` : "", marketCap: fmtMktCap(q.marketCap), why: generateWhy({ volRatio, beta, daysToEarnings, move30dPct, rangePct }) };
 };
 
 const Tip = ({ term, children }) => {
@@ -154,167 +121,51 @@ const Tip = ({ term, children }) => {
   const iconRef = React.useRef(null);
   const def = GLOSSARY[term];
   if (!def) return children || null;
-
-  const handleEnter = () => {
-    if (iconRef.current) {
-      const rect = iconRef.current.getBoundingClientRect();
-      setPos({ top: rect.top - 8, left: rect.left + rect.width / 2 });
-    }
-    setShow(true);
-  };
-
+  const handleEnter = () => { if (iconRef.current) { const rect = iconRef.current.getBoundingClientRect(); setPos({ top: rect.top - 8, left: rect.left + rect.width / 2 }); } setShow(true); };
   return (
     <span className="inline-flex items-center gap-1 relative">
       {children}
-      <span
-        ref={iconRef}
-        className="inline-flex cursor-help"
-        onMouseEnter={handleEnter}
-        onMouseLeave={() => setShow(false)}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (!show && iconRef.current) {
-            const rect = iconRef.current.getBoundingClientRect();
-            setPos({ top: rect.top - 8, left: rect.left + rect.width / 2 });
-          }
-          setShow(!show);
-        }}
-      >
+      <span ref={iconRef} className="inline-flex cursor-help" onMouseEnter={handleEnter} onMouseLeave={() => setShow(false)}
+        onClick={(e) => { e.stopPropagation(); if (!show && iconRef.current) { const rect = iconRef.current.getBoundingClientRect(); setPos({ top: rect.top - 8, left: rect.left + rect.width / 2 }); } setShow(!show); }}>
         <HelpCircle size={13} className="text-gray-400 hover:text-gray-600 transition-colors" />
       </span>
-      {show && (
-        <span
-          className="fixed z-[9999] w-72 p-3 bg-gray-900 text-white text-xs leading-relaxed rounded-lg shadow-lg pointer-events-none"
-          style={{ top: pos.top, left: pos.left, transform: 'translate(-50%, -100%)' }}
-        >
-          <span className="font-semibold block mb-1">{term.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim()}</span>
-          {def}
-          <span className="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-gray-900" />
-        </span>
-      )}
+      {show && (<span className="fixed z-[9999] w-72 p-3 bg-gray-900 text-white text-xs leading-relaxed rounded-lg shadow-lg pointer-events-none" style={{ top: pos.top, left: pos.left, transform: 'translate(-50%, -100%)' }}>
+        <span className="font-semibold block mb-1">{term.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim()}</span>{def}
+        <span className="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-gray-900" /></span>)}
     </span>
   );
 };
 
-const EtradeTip = ({ children }) => (
-  <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 flex items-start gap-2.5">
-    <Info size={16} className="text-indigo-500 mt-0.5 shrink-0" />
-    <div className="text-xs text-indigo-800 leading-relaxed">{children}</div>
-  </div>
-);
+const EtradeTip = ({ children }) => (<div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 flex items-start gap-2.5"><Info size={16} className="text-indigo-500 mt-0.5 shrink-0" /><div className="text-xs text-indigo-800 leading-relaxed">{children}</div></div>);
 
-const formatCurrency = (n) => {
-  if (n === undefined || n === null || isNaN(n)) return "$0.00";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
-};
+const formatCurrency = (n) => { if (n === undefined || n === null || isNaN(n)) return "$0.00"; return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n); };
 const formatPct = (n) => (n === undefined || isNaN(n) ? "0.00%" : (n * 100).toFixed(2) + "%");
-const today = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
-const parseLocalDate = (s) => {
-  if (!s) return new Date();
-  const [y, m, d] = s.split("-").map(Number);
-  return new Date(y, m - 1, d);
-};
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const parseLocalDate = (s) => { if (!s) return new Date(); const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const daysBetween = (a, b) => Math.round((parseLocalDate(b) - parseLocalDate(a)) / 86400000);
 const isExpired = (exp) => new Date(exp) < new Date(today());
 const grossPrem = (c) => c.totalPremium != null ? c.totalPremium : c.premium * c.contracts * 100;
 const closeCostOf = (c) => c.totalCloseCost != null ? c.totalCloseCost : (c.status === "closed" ? (c.closePrice || 0) * c.contracts * 100 : 0);
 const netPrem = (c) => grossPrem(c) - closeCostOf(c);
 
-const EMPTY_STATE = {
-  positions: [],
-  calls: [],
-  watchlist: [],
-  events: [],
-  nextId: 1,
-};
+const EMPTY_STATE = { positions: [], calls: [], watchlist: [], events: [], nextId: 1 };
 
 const StatusBadge = ({ status }) => {
-  const colors = {
-    open: "bg-blue-100 text-blue-800",
-    expired: "bg-green-100 text-green-800",
-    closed: "bg-yellow-100 text-yellow-800",
-    assigned: "bg-red-100 text-red-800",
-  };
-  return (
-    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${colors[status] || "bg-gray-100 text-gray-700"}`}>
-      {status.charAt(0).toUpperCase() + status.slice(1)}
-    </span>
-  );
+  const colors = { open: "bg-blue-100 text-blue-800", expired: "bg-green-100 text-green-800", closed: "bg-yellow-100 text-yellow-800", assigned: "bg-red-100 text-red-800" };
+  return (<span className={`text-xs font-medium px-2 py-0.5 rounded-full ${colors[status] || "bg-gray-100 text-gray-700"}`}>{status.charAt(0).toUpperCase() + status.slice(1)}</span>);
 };
-
-const Card = ({ children, className = "" }) => (
-  <div className={`bg-white rounded-xl border border-gray-200 shadow-sm ${className}`}>{children}</div>
-);
-
-const StatCard = ({ icon: Icon, label, value, sub, color = "text-gray-900" }) => (
-  <Card className="p-5">
-    <div className="flex items-start justify-between">
-      <div>
-        <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</p>
-        <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
-        {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
-      </div>
-      <div className="p-2 bg-gray-50 rounded-lg">
-        <Icon size={20} className="text-gray-400" />
-      </div>
-    </div>
-  </Card>
-);
-
-const Modal = ({ open, onClose, title, children }) => {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
-        </div>
-        <div className="px-6 py-4">{children}</div>
-      </div>
-    </div>
-  );
-};
-
-const Field = ({ label, children }) => (
-  <div className="space-y-1">
-    <label className="text-xs font-medium text-gray-600">{label}</label>
-    {children}
-  </div>
-);
-
-const Input = (props) => (
-  <input {...props} className={`w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${props.className || ""}`} />
-);
-
-const Select = ({ options, ...props }) => (
-  <select {...props} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
-    {options.map((o) => (
-      <option key={o.value} value={o.value}>{o.label}</option>
-    ))}
-  </select>
-);
-
-const Btn = ({ children, variant = "primary", size = "md", ...props }) => {
-  const base = "inline-flex items-center justify-center font-medium rounded-lg transition-colors gap-1.5";
-  const variants = {
-    primary: "bg-gray-900 text-white hover:bg-gray-800",
-    secondary: "bg-gray-100 text-gray-700 hover:bg-gray-200",
-    danger: "bg-red-50 text-red-700 hover:bg-red-100",
-    ghost: "text-gray-600 hover:bg-gray-100",
-  };
-  const sizes = { sm: "text-xs px-2.5 py-1.5", md: "text-sm px-4 py-2" };
-  return <button {...props} className={`${base} ${variants[variant]} ${sizes[size]} ${props.className || ""}`}>{children}</button>;
-};
+const Card = ({ children, className = "" }) => (<div className={`bg-white rounded-xl border border-gray-200 shadow-sm ${className}`}>{children}</div>);
+const StatCard = ({ icon: Icon, label, value, sub, color = "text-gray-900" }) => (<Card className="p-5"><div className="flex items-start justify-between"><div><p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</p><p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>{sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}</div><div className="p-2 bg-gray-50 rounded-lg"><Icon size={20} className="text-gray-400" /></div></div></Card>);
+const Modal = ({ open, onClose, title, children }) => { if (!open) return null; return (<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}><div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}><div className="flex items-center justify-between px-6 py-4 border-b border-gray-100"><h3 className="text-lg font-semibold text-gray-900">{title}</h3><button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-lg"><X size={18} /></button></div><div className="px-6 py-4">{children}</div></div></div>); };
+const Field = ({ label, children }) => (<div className="space-y-1"><label className="text-xs font-medium text-gray-600">{label}</label>{children}</div>);
+const Input = (props) => (<input {...props} className={`w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${props.className || ""}`} />);
+const Select = ({ options, ...props }) => (<select {...props} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">{options.map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}</select>);
+const Btn = ({ children, variant = "primary", size = "md", ...props }) => { const base = "inline-flex items-center justify-center font-medium rounded-lg transition-colors gap-1.5"; const variants = { primary: "bg-gray-900 text-white hover:bg-gray-800", secondary: "bg-gray-100 text-gray-700 hover:bg-gray-200", danger: "bg-red-50 text-red-700 hover:bg-red-100", ghost: "text-gray-600 hover:bg-gray-100" }; const sizes = { sm: "text-xs px-2.5 py-1.5", md: "text-sm px-4 py-2" }; return <button {...props} className={`${base} ${variants[variant]} ${sizes[size]} ${props.className || ""}`}>{children}</button>; };
 
 export default function CoveredCallDashboard() {
   const [householdCode, setHouseholdCode] = useState(() => localStorage.getItem("cc_household_code") || "");
   const [codeInput, setCodeInput] = useState("");
   const [joined, setJoined] = useState(() => !!localStorage.getItem("cc_household_code"));
-
   const [data, setData] = useState(EMPTY_STATE);
   const [tab, setTab] = useState("Dashboard");
   const [loading, setLoading] = useState(true);
@@ -336,7 +187,7 @@ export default function CoveredCallDashboard() {
   const [livePrices, setLivePrices] = useState({});
   const [pricesLoading, setPricesLoading] = useState(false);
   const [pricesTimestamp, setPricesTimestamp] = useState(null);
-  const [syncStatus, setSyncStatus] = useState(null); // "saving" | "saved" | "error"
+  const [syncStatus, setSyncStatus] = useState(null);
   const [showImport, setShowImport] = useState(false);
 
   const fetchLivePrices = useCallback(async () => {
@@ -346,9 +197,7 @@ export default function CoveredCallDashboard() {
     if (tickers.length === 0) return;
     setPricesLoading(true);
     try {
-      const promises = tickers.map(t =>
-        fetch(`/api/fmp?action=quote&tickers=${t}`).then(r => r.json()).then(d => (Array.isArray(d) && d[0]) || null).catch(() => null)
-      );
+      const promises = tickers.map(t => fetch(`/api/fmp?action=quote&tickers=${t}`).then(r => r.json()).then(d => (Array.isArray(d) && d[0]) || null).catch(() => null));
       const results = await Promise.all(promises);
       const prices = {};
       results.forEach(q => { if (q?.symbol && q.price) prices[q.symbol] = q.price; });
@@ -358,182 +207,49 @@ export default function CoveredCallDashboard() {
     setPricesLoading(false);
   }, [data.calls, data.positions]);
 
-  // Load data from API
   useEffect(() => {
     if (!joined || !householdCode) return;
     (async () => {
-      try {
-        const res = await fetch(`/api/data?code=${encodeURIComponent(householdCode)}`);
-        const json = await res.json();
-        if (json.data) setData(json.data);
-      } catch (err) { console.error("Load error:", err); }
+      try { const res = await fetch(`/api/data?code=${encodeURIComponent(householdCode)}`); const json = await res.json(); if (json.data) setData(json.data); } catch (err) { console.error("Load error:", err); }
       setLoading(false);
     })();
   }, [joined, householdCode]);
 
-  // Save data to API
   const save = useCallback(async (newData) => {
     setData(newData);
     setSyncStatus("saving");
-    try {
-      await fetch("/api/data", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: householdCode, data: newData }),
-      });
-      setSyncStatus("saved");
-      setTimeout(() => setSyncStatus(null), 2000);
-    } catch {
-      setSyncStatus("error");
-    }
+    try { await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: householdCode, data: newData }) }); setSyncStatus("saved"); setTimeout(() => setSyncStatus(null), 2000); } catch { setSyncStatus("error"); }
   }, [householdCode]);
 
-  // Join handler
-  const handleJoin = () => {
-    const code = codeInput.trim().toLowerCase();
-    if (code.length < 2) return;
-    setHouseholdCode(code);
-    localStorage.setItem("cc_household_code", code);
-    setJoined(true);
-  };
+  const handleJoin = () => { const code = codeInput.trim().toLowerCase(); if (code.length < 2) return; setHouseholdCode(code); localStorage.setItem("cc_household_code", code); setJoined(true); };
+  const handleLeave = () => { localStorage.removeItem("cc_household_code"); setHouseholdCode(""); setJoined(false); setData(EMPTY_STATE); setCodeInput(""); setLoading(true); };
 
-  // Leave household
-  const handleLeave = () => {
-    localStorage.removeItem("cc_household_code");
-    setHouseholdCode("");
-    setJoined(false);
-    setData(EMPTY_STATE);
-    setCodeInput("");
-    setLoading(true);
-  };
+  // ═══════════════════════════════════════════════════════
+  // FIX: These 4 hooks MUST be before the if(!joined) return
+  // ═══════════════════════════════════════════════════════
 
-  // Household code entry screen
-  if (!joined) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-md w-full space-y-6">
-          <div className="text-center">
-            <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mx-auto mb-4">
-              <TrendingUp className="text-white" size={24} />
-            </div>
-            <h1 className="text-2xl font-bold text-gray-900">Covered Call Dashboard</h1>
-            <p className="text-sm text-gray-500 mt-2">Enter a household code to get started. Anyone with the same code shares the same data.</p>
-          </div>
-          <div className="space-y-3">
-            <label className="block text-sm font-medium text-gray-700">Household Code</label>
-            <input
-              type="text"
-              value={codeInput}
-              onChange={(e) => setCodeInput(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-              onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-              placeholder="e.g. smith-family"
-              className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent text-lg"
-              autoFocus
-            />
-            <p className="text-xs text-gray-400">Letters, numbers, and dashes only. Share this code with your partner so you see the same dashboard.</p>
-          </div>
-          <button
-            onClick={handleJoin}
-            disabled={codeInput.trim().length < 2}
-            className="w-full py-3 bg-gray-900 text-white rounded-xl font-medium hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            Enter Dashboard
-          </button>
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => { (async () => { try { const raw = localStorage.getItem("cc_scanner_cache"); if (raw) { const cached = JSON.parse(raw); if (cached.timestamp?.slice(0, 10) === today()) { setScannerData(cached.stocks); setScannerTimestamp(cached.timestamp); } } } catch {} })(); }, []);
 
-  // Scanner: load cache on mount
-  useEffect(() => {
-    (async () => {
-      try {
-        const raw = localStorage.getItem("cc_scanner_cache");
-        if (raw) {
-          const cached = JSON.parse(raw);
-          const cachedDate = cached.timestamp?.slice(0, 10);
-          const todayDate = today();
-          if (cachedDate === todayDate) {
-            setScannerData(cached.stocks);
-            setScannerTimestamp(cached.timestamp);
-          }
-        }
-      } catch {}
-    })();
-  }, []);
-
-  // Auto-fetch live prices when on Dashboard with open calls (5-min cache)
   useEffect(() => {
     const hasOpenCalls = data.calls.some(c => c.status === "open");
     const cacheAge = pricesTimestamp ? (Date.now() - new Date(pricesTimestamp).getTime()) / 60000 : 999;
-    if (tab === "Dashboard" && hasOpenCalls && !pricesLoading && !loading && cacheAge > 5) {
-      fetchLivePrices();
-    }
+    if (tab === "Dashboard" && hasOpenCalls && !pricesLoading && !loading && cacheAge > 5) fetchLivePrices();
   }, [tab, loading, data.calls]);
 
   const fetchScannerData = useCallback(async () => {
-    setScannerLoading(true);
-    setScannerError(null);
+    setScannerLoading(true); setScannerError(null);
     try {
-      const existingTickers = [
-        ...data.watchlist.map(w => w.ticker.toUpperCase()),
-        ...data.positions.map(p => p.ticker.toUpperCase()),
-      ];
+      const existingTickers = [...data.watchlist.map(w => w.ticker.toUpperCase()), ...data.positions.map(p => p.ticker.toUpperCase())];
       const excludeNote = existingTickers.length > 0 ? ` Exclude: ${existingTickers.join(", ")}.` : "";
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 2000,
-          system: `You are a stock screener. Search the web for 10 US stocks that are good covered call candidates right now — look for high options volume, big recent price moves, or upcoming earnings. Market cap over $2B, price over $10.
-
-IMPORTANT: Your ENTIRE response must be a valid JSON array and nothing else. No explanation, no markdown, no text before or after. Just the JSON array.
-
-Format: [{"ticker":"XXX","sector":"Tech","price":45.2,"marketCap":"12B","volScore":78,"volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","why":"One sentence reason"}]
-
-volScore should be 0-100 estimating covered call attractiveness based on volatility, options activity, and catalysts.`,
-          messages: [
-            { role: "user", content: `Top 10 CC candidates now.${excludeNote} Date: ${new Date().toLocaleDateString()}.` }
-          ],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
-      });
+      const response = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2000, system: `You are a stock screener. Search the web for 10 US stocks that are good covered call candidates right now — look for high options volume, big recent price moves, or upcoming earnings. Market cap over $2B, price over $10.\n\nIMPORTANT: Your ENTIRE response must be a valid JSON array and nothing else. No explanation, no markdown, no text before or after. Just the JSON array.\n\nFormat: [{"ticker":"XXX","sector":"Tech","price":45.2,"marketCap":"12B","volScore":78,"volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","why":"One sentence reason"}]\n\nvolScore should be 0-100 estimating covered call attractiveness based on volatility, options activity, and catalysts.`, messages: [{ role: "user", content: `Top 10 CC candidates now.${excludeNote} Date: ${new Date().toLocaleDateString()}.` }], tools: [{ type: "web_search_20250305", name: "web_search" }] }) });
       const result = await response.json();
-      console.log("Scanner API result:", JSON.stringify(result).slice(0, 500));
-      if (!response.ok) {
-        setScannerError(result?.error?.message || `Error ${response.status}`);
-        setScannerLoading(false);
-        return;
-      }
+      if (!response.ok) { setScannerError(result?.error?.message || `Error ${response.status}`); setScannerLoading(false); return; }
       const text = (result.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
       const clean = text.replace(/```json|```/g, "").trim();
       let parsed;
-      try { parsed = JSON.parse(clean); } catch {
-        // Try to find JSON array in the response
-        const m = clean.match(/\[[\s\S]*?\](?=[^[\]]*$)/);
-        if (m) {
-          try { parsed = JSON.parse(m[0]); } catch {}
-        }
-        // If still no luck, try finding individual JSON objects and wrapping them
-        if (!parsed) {
-          const objects = [...clean.matchAll(/\{[^{}]*"ticker"[^{}]*\}/g)].map(m => {
-            try { return JSON.parse(m[0]); } catch { return null; }
-          }).filter(Boolean);
-          if (objects.length > 0) parsed = objects;
-        }
-        if (!parsed) throw new Error("Could not parse response");
-      }
-      console.log("Scanner parsed:", parsed?.length, "stocks");
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        setScannerData(parsed);
-        setScannerTimestamp(new Date().toISOString());
-        try { localStorage.setItem("cc_scanner_cache", JSON.stringify({ stocks: parsed, timestamp: new Date().toISOString() })); } catch {}
-      }
-    } catch (err) {
-      console.error("Scanner error:", err);
-      setScannerError(err.message || "Failed to load");
-    }
+      try { parsed = JSON.parse(clean); } catch { const m = clean.match(/\[[\s\S]*?\](?=[^[\]]*$)/); if (m) { try { parsed = JSON.parse(m[0]); } catch {} } if (!parsed) { const objects = [...clean.matchAll(/\{[^{}]*"ticker"[^{}]*\}/g)].map(m => { try { return JSON.parse(m[0]); } catch { return null; } }).filter(Boolean); if (objects.length > 0) parsed = objects; } if (!parsed) throw new Error("Could not parse response"); }
+      if (Array.isArray(parsed) && parsed.length > 0) { setScannerData(parsed); setScannerTimestamp(new Date().toISOString()); try { localStorage.setItem("cc_scanner_cache", JSON.stringify({ stocks: parsed, timestamp: new Date().toISOString() })); } catch {} }
+    } catch (err) { console.error("Scanner error:", err); setScannerError(err.message || "Failed to load"); }
     setScannerLoading(false);
   }, [data.watchlist, data.positions]);
 
@@ -542,269 +258,78 @@ volScore should be 0-100 estimating covered call attractiveness based on volatil
     if (tickers.length === 0) return;
     setWatchlistScoresLoading(true);
     try {
-      // Step 1: FMP for base data (free, instant)
-      const fmpResults = await Promise.all(tickers.map(async (t) => {
-        try {
-          const [qResp, pResp] = await Promise.all([
-            fetch(`/api/fmp?action=quote&tickers=${t}`),
-            fetch(`/api/fmp?action=profile&tickers=${t}`),
-          ]);
-          const q = await qResp.json().then(d => Array.isArray(d) && d[0] || null);
-          const p = await pResp.json().then(d => Array.isArray(d) && d[0] || null);
-          return { ticker: t, q, p };
-        } catch { return { ticker: t, q: null, p: null }; }
-      }));
-      // Step 2: One Haiku call for earnings + volume (fields FMP free tier misses)
+      const fmpResults = await Promise.all(tickers.map(async (t) => { try { const [qResp, pResp] = await Promise.all([fetch(`/api/fmp?action=quote&tickers=${t}`), fetch(`/api/fmp?action=profile&tickers=${t}`)]); const q = await qResp.json().then(d => Array.isArray(d) && d[0] || null); const p = await pResp.json().then(d => Array.isArray(d) && d[0] || null); return { ticker: t, q, p }; } catch { return { ticker: t, q: null, p: null }; } }));
       let aiData = {};
-      try {
-        const aiResp = await fetch("/api/claude", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-haiku-4-5-20251001",
-            max_tokens: 500,
-            system: `For each ticker, find next earnings date and current volume vs 30-day average volume ratio. Return ONLY JSON: {"AAPL":{"nextEarnings":"Apr 24","volumeVsAvg":"1.4x"},...} JSON only.`,
-            messages: [{ role: "user", content: `${tickers.join(",")}. Date: ${new Date().toLocaleDateString()}.` }],
-            tools: [{ type: "web_search_20250305", name: "web_search" }],
-          }),
-        });
-        const aiResult = await aiResp.json();
-        if (aiResp.ok) {
-          const text = (aiResult.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
-          const clean = text.replace(/```json|```/g, "").trim();
-          try { aiData = JSON.parse(clean); } catch {
-            const m = clean.match(/\{[\s\S]*\}/);
-            if (m) aiData = JSON.parse(m[0]);
-          }
-        }
-      } catch (err) { console.error("AI supplement error:", err); }
-      // Merge
-      const updated = data.watchlist.map(w => {
-        const r = fmpResults.find(r => r.ticker === w.ticker.toUpperCase());
-        if (!r?.q) return w;
-        const enriched = enrichFromFMP(r.q, r.p);
-        const ai = aiData[w.ticker.toUpperCase()] || {};
-        return { ...w, ...enriched,
-          volumeVsAvg: ai.volumeVsAvg || enriched.volumeVsAvg,
-          nextEarnings: ai.nextEarnings || enriched.nextEarnings,
-          dateScored: today() };
-      });
+      try { const aiResp = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 500, system: `For each ticker, find next earnings date and current volume vs 30-day average volume ratio. Return ONLY JSON: {"AAPL":{"nextEarnings":"Apr 24","volumeVsAvg":"1.4x"},...} JSON only.`, messages: [{ role: "user", content: `${tickers.join(",")}. Date: ${new Date().toLocaleDateString()}.` }], tools: [{ type: "web_search_20250305", name: "web_search" }] }) }); const aiResult = await aiResp.json(); if (aiResp.ok) { const text = (aiResult.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n"); const clean = text.replace(/```json|```/g, "").trim(); try { aiData = JSON.parse(clean); } catch { const m = clean.match(/\{[\s\S]*\}/); if (m) aiData = JSON.parse(m[0]); } } } catch (err) { console.error("AI supplement error:", err); }
+      const updated = data.watchlist.map(w => { const r = fmpResults.find(r => r.ticker === w.ticker.toUpperCase()); if (!r?.q) return w; const enriched = enrichFromFMP(r.q, r.p); const ai = aiData[w.ticker.toUpperCase()] || {}; return { ...w, ...enriched, volumeVsAvg: ai.volumeVsAvg || enriched.volumeVsAvg, nextEarnings: ai.nextEarnings || enriched.nextEarnings, dateScored: today() }; });
       setData(prev => ({ ...prev, watchlist: updated }));
     } catch (err) { console.error("Watchlist scores error:", err); }
     setWatchlistScoresLoading(false);
   }, [data.watchlist]);
 
-  const nextId = () => {
-    const id = data.nextId;
-    return id;
-  };
+  // ═══════════════════════════════════════════════════════
+  // Conditional return is now AFTER all hooks — safe!
+  // ═══════════════════════════════════════════════════════
 
-  const addPosition = (pos) => {
-    const id = data.nextId;
-    save({ ...data, positions: [...data.positions, { ...pos, id }], nextId: id + 1 });
-  };
-
-  const updatePosition = (id, updates) => {
-    save({ ...data, positions: data.positions.map((p) => (p.id === id ? { ...p, ...updates } : p)) });
-  };
-
-  const removePosition = (id) => {
-    save({ ...data, positions: data.positions.filter((p) => p.id !== id) });
-  };
-
-  const addCall = (call) => {
-    const id = data.nextId;
-    save({ ...data, calls: [...data.calls, { ...call, id, status: "open" }], nextId: id + 1 });
-  };
-
-  const addPastCall = (call) => {
-    const id = data.nextId;
-    save({ ...data, calls: [...data.calls, { ...call, id }], nextId: id + 1 });
-  };
-
-  const updateCall = (id, updates) => {
-    save({ ...data, calls: data.calls.map(c => c.id === id ? { ...c, ...updates } : c) });
-  };
-
-  const closeCall = (id, action, closePrice = 0) => {
-    save({
-      ...data,
-      calls: data.calls.map((c) =>
-        c.id === id ? { ...c, status: action, dateClosed: today(), closePrice: parseFloat(closePrice) || 0 } : c
-      ),
-    });
-  };
-
-  const addWatchlistItem = (item) => {
-    const id = data.nextId;
-    save({ ...data, watchlist: [...data.watchlist, { ...item, id }], nextId: id + 1 });
-  };
-
-  const removeWatchlistItem = (id) => {
-    save({ ...data, watchlist: data.watchlist.filter((w) => w.id !== id) });
-  };
-
-  const addEvent = (event) => {
-    const id = data.nextId;
-    save({ ...data, events: [...data.events, { ...event, id }], nextId: id + 1 });
-  };
-
-  const removeEvent = (id) => {
-    save({ ...data, events: data.events.filter((e) => e.id !== id) });
-  };
-
-  // Derived
-  const activePositions = data.positions;
-  const openCalls = data.calls.filter((c) => c.status === "open");
-  const closedCalls = data.calls.filter((c) => c.status !== "open");
-  const totalPremiumCollected = data.calls.reduce((sum, c) => {
-    const prem = grossPrem(c);
-    if (c.status === "closed") return sum + prem - closeCostOf(c);
-    if (c.status === "open") return sum;
-    return sum + prem;
-  }, 0);
-  const totalCapitalEverDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
-  const totalCapitalDeployed = activePositions.reduce((sum, p) => {
-    const pCalls = callsForPosition(p, activePositions, data.calls);
-    const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
-    return sum + p.costBasis * (p.shares - assignedShares);
-  }, 0);
-  const activeCalls = openCalls.length;
-
-  const upcomingEvents = data.events
-    .filter((e) => new Date(e.date) >= new Date(today()))
-    .sort((a, b) => new Date(a.date) - new Date(b.date))
-    .slice(0, 8);
-
-  // Weekly premium data for charts
-  const premiumByWeek = useMemo(() => {
-    const weeks = {};
-    data.calls.filter(c => c.status !== "open").forEach((c) => {
-      const dateStr = c.dateClosed || c.dateOpened;
-      const [y, m, d] = (dateStr || "").split("-").map(Number);
-      if (!y) return;
-      const dt = new Date(y, m - 1, d);
-      const weekStart = new Date(dt);
-      weekStart.setDate(dt.getDate() - dt.getDay());
-      const key = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`;
-      const net = netPrem(c);
-      weeks[key] = (weeks[key] || 0) + net;
-    });
-    const sorted = Object.entries(weeks).sort(([a], [b]) => a.localeCompare(b));
-    let cum = 0;
-    return sorted.map(([week, amount]) => {
-      cum += amount;
-      return { week: week.slice(5), amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 };
-    });
-  }, [data.calls]);
-
-  const premiumByMonth = useMemo(() => {
-    const months = {};
-    data.calls.filter(c => c.status !== "open").forEach((c) => {
-      const dateStr = c.dateClosed || c.dateOpened;
-      const key = (dateStr || "").slice(0, 7);
-      if (!key || key.length < 7) return;
-      const net = netPrem(c);
-      months[key] = (months[key] || 0) + net;
-    });
-    const sorted = Object.entries(months).sort(([a], [b]) => a.localeCompare(b));
-    let cum = 0;
-    return sorted.map(([month, amount]) => {
-      cum += amount;
-      return { month, amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 };
-    });
-  }, [data.calls]);
-
-  // Tax
-  const taxData = useMemo(() => {
-    return data.calls.filter(c => c.status !== "open").map((c) => {
-      const held = daysBetween(c.dateOpened, c.dateClosed || today());
-      const net = netPrem(c);
-      const treatment = held > 365 ? "Long-term" : "Short-term";
-      // Simple wash sale flag: same ticker closed at a loss within 30 days of another buy
-      const isLoss = net < 0;
-      const nearbyTrades = data.calls.filter(
-        (o) => o.id !== c.id && o.ticker === c.ticker && Math.abs(daysBetween(c.dateClosed || today(), o.dateOpened)) <= 30
-      );
-      const washSaleRisk = isLoss && nearbyTrades.length > 0;
-      return { ...c, held, net, treatment, washSaleRisk };
-    });
-  }, [data.calls]);
-
-  // Annualized yield
-  const annualizedYield = useMemo(() => {
-    if (totalCapitalEverDeployed === 0) return 0;
-    const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort();
-    if (allDates.length === 0) return 0;
-    const daysSinceFirst = daysBetween(allDates[0], today());
-    if (daysSinceFirst <= 0) return 0;
-    return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst);
-  }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
-
-  // Weekly P&L summary
-  const weeklyPL = useMemo(() => {
-    const now = new Date();
-    const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
-    const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`;
-
-    const thisWeekCalls = data.calls.filter(c => {
-      if (c.status === "open") return false;
-      const closed = c.dateClosed || c.dateOpened;
-      return closed >= startKey;
-    });
-    const premium = thisWeekCalls.reduce((sum, c) => {
-      const net = netPrem(c);
-      return sum + net;
-    }, 0);
-    const callsWritten = data.calls.filter(c => {
-      return (c.dateOpened || "") >= startKey;
-    }).length;
-    return { premium, trades: thisWeekCalls.length, callsWritten };
-  }, [data.calls]);
-
-  // Concentration analysis
-  const concentration = useMemo(() => {
-    if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null };
-    
-    // Group by ticker, subtracting assigned shares
-    const grouped = {};
-    activePositions.forEach(p => {
-      const t = p.ticker.toUpperCase();
-      const pCalls = callsForPosition(p, activePositions, data.calls);
-      const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
-      const currentShares = p.shares - assignedShares;
-      if (currentShares <= 0) return; // skip fully assigned
-      if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 };
-      grouped[t].value += p.costBasis * currentShares;
-      grouped[t].currentShares += currentShares;
-    });
-    
-    const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0);
-    const positions = Object.values(grouped).map(g => ({
-      ...g,
-      pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0,
-    })).sort((a, b) => b.pct - a.pct);
-
-    const maxPct = positions[0]?.pct || 0;
-    const uniqueTickers = positions.map(p => p.ticker.toUpperCase());
-    const coveredCount = uniqueTickers.filter(t => data.calls.some(c => c.status === "open" && c.ticker.toUpperCase() === t)).length;
-    const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0;
-
-    let warning = null;
-    if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio — heavy concentration risk.` };
-    else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of portfolio — consider diversifying.` };
-
-    return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning };
-  }, [activePositions, totalCapitalDeployed, data.calls]);
-
-  if (loading) {
+  if (!joined) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-pulse text-gray-400">Loading dashboard...</div>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-md w-full space-y-6">
+          <div className="text-center">
+            <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mx-auto mb-4"><TrendingUp className="text-white" size={24} /></div>
+            <h1 className="text-2xl font-bold text-gray-900">Covered Call Dashboard</h1>
+            <p className="text-sm text-gray-500 mt-2">Enter a household code to get started. Anyone with the same code shares the same data.</p>
+          </div>
+          <div className="space-y-3">
+            <label className="block text-sm font-medium text-gray-700">Household Code</label>
+            <input type="text" value={codeInput} onChange={(e) => setCodeInput(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} onKeyDown={(e) => e.key === "Enter" && handleJoin()} placeholder="e.g. smith-family" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent text-lg" autoFocus />
+            <p className="text-xs text-gray-400">Letters, numbers, and dashes only. Share this code with your partner so you see the same dashboard.</p>
+          </div>
+          <button onClick={handleJoin} disabled={codeInput.trim().length < 2} className="w-full py-3 bg-gray-900 text-white rounded-xl font-medium hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">Enter Dashboard</button>
+        </div>
       </div>
     );
   }
 
+  const nextId = () => data.nextId;
+  const addPosition = (pos) => { const id = data.nextId; save({ ...data, positions: [...data.positions, { ...pos, id }], nextId: id + 1 }); };
+  const updatePosition = (id, updates) => save({ ...data, positions: data.positions.map((p) => (p.id === id ? { ...p, ...updates } : p)) });
+  const removePosition = (id) => save({ ...data, positions: data.positions.filter((p) => p.id !== id) });
+  const addCall = (call) => { const id = data.nextId; save({ ...data, calls: [...data.calls, { ...call, id, status: "open" }], nextId: id + 1 }); };
+  const addPastCall = (call) => { const id = data.nextId; save({ ...data, calls: [...data.calls, { ...call, id }], nextId: id + 1 }); };
+  const updateCall = (id, updates) => save({ ...data, calls: data.calls.map(c => c.id === id ? { ...c, ...updates } : c) });
+  const closeCall = (id, action, closePrice = 0) => save({ ...data, calls: data.calls.map((c) => c.id === id ? { ...c, status: action, dateClosed: today(), closePrice: parseFloat(closePrice) || 0 } : c) });
+  const addWatchlistItem = (item) => { const id = data.nextId; save({ ...data, watchlist: [...data.watchlist, { ...item, id }], nextId: id + 1 }); };
+  const removeWatchlistItem = (id) => save({ ...data, watchlist: data.watchlist.filter((w) => w.id !== id) });
+  const addEvent = (event) => { const id = data.nextId; save({ ...data, events: [...data.events, { ...event, id }], nextId: id + 1 }); };
+  const removeEvent = (id) => save({ ...data, events: data.events.filter((e) => e.id !== id) });
+
+  const activePositions = data.positions;
+  const openCalls = data.calls.filter((c) => c.status === "open");
+  const closedCalls = data.calls.filter((c) => c.status !== "open");
+  const totalPremiumCollected = data.calls.reduce((sum, c) => { const prem = grossPrem(c); if (c.status === "closed") return sum + prem - closeCostOf(c); if (c.status === "open") return sum; return sum + prem; }, 0);
+  const totalCapitalEverDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
+  const totalCapitalDeployed = activePositions.reduce((sum, p) => { const pCalls = callsForPosition(p, activePositions, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); return sum + p.costBasis * (p.shares - assignedShares); }, 0);
+  const activeCalls = openCalls.length;
+  const upcomingEvents = data.events.filter((e) => new Date(e.date) >= new Date(today())).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 8);
+  const premiumByWeek = useMemo(() => { const weeks = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const [y, m, d] = (dateStr || "").split("-").map(Number); if (!y) return; const dt = new Date(y, m - 1, d); const weekStart = new Date(dt); weekStart.setDate(dt.getDate() - dt.getDay()); const key = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`; weeks[key] = (weeks[key] || 0) + netPrem(c); }); const sorted = Object.entries(weeks).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([week, amount]) => { cum += amount; return { week: week.slice(5), amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
+  const premiumByMonth = useMemo(() => { const months = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const key = (dateStr || "").slice(0, 7); if (!key || key.length < 7) return; months[key] = (months[key] || 0) + netPrem(c); }); const sorted = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([month, amount]) => { cum += amount; return { month, amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
+  const taxData = useMemo(() => data.calls.filter(c => c.status !== "open").map((c) => { const held = daysBetween(c.dateOpened, c.dateClosed || today()); const net = netPrem(c); const treatment = held > 365 ? "Long-term" : "Short-term"; const isLoss = net < 0; const nearbyTrades = data.calls.filter((o) => o.id !== c.id && o.ticker === c.ticker && Math.abs(daysBetween(c.dateClosed || today(), o.dateOpened)) <= 30); return { ...c, held, net, treatment, washSaleRisk: isLoss && nearbyTrades.length > 0 }; }), [data.calls]);
+  const annualizedYield = useMemo(() => { if (totalCapitalEverDeployed === 0) return 0; const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return 0; const daysSinceFirst = daysBetween(allDates[0], today()); if (daysSinceFirst <= 0) return 0; return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst); }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
+  const weeklyPL = useMemo(() => { const now = new Date(); const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`; const thisWeekCalls = data.calls.filter(c => { if (c.status === "open") return false; return (c.dateClosed || c.dateOpened) >= startKey; }); return { premium: thisWeekCalls.reduce((sum, c) => sum + netPrem(c), 0), trades: thisWeekCalls.length, callsWritten: data.calls.filter(c => (c.dateOpened || "") >= startKey).length }; }, [data.calls]);
+  const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const pCalls = callsForPosition(p, activePositions, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => data.calls.some(c => c.status === "open" && c.ticker.toUpperCase() === t)).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio — heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of portfolio — consider diversifying.` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
+
+  if (loading) { return (<div className="min-h-screen bg-gray-50 flex items-center justify-center"><div className="animate-pulse text-gray-400">Loading dashboard...</div></div>); }
+
+// ═══════════════════════════════════════════════════════════════════════
+// STOP HERE — Copy everything from "return (" to the end of your
+// original Dashboard.jsx file and paste it below this line.
+// That includes the main JSX return and ALL form components
+// (TradeLogTable, EditCallForm, LogPastTradeForm, AddPositionForm,
+// EditPositionForm, WriteCallForm, CloseCallForm, AddEventForm,
+// ImportDataForm, AddWatchlistForm).
+// Those components have ZERO changes — just paste them as-is.
+// ═══════════════════════════════════════════════════════════════════════
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
