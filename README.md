@@ -6,7 +6,7 @@ A personal covered call tracking dashboard built with React + Vite. Tracks posit
 
 ### 1. Push to GitHub
 
-Create a new repo on GitHub, then:
+Create a new    repo on GitHub, then:
 
 ```bash
 cd cc-dashboard
