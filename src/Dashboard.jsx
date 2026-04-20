@@ -203,7 +203,7 @@ export default function CoveredCallDashboard() {
     try { await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: householdCode, data: newData }) }); setSyncStatus("saved"); setTimeout(() => setSyncStatus(null), 2000); } catch { setSyncStatus("error"); }
   }, [householdCode]);
  
-  const handleJoin = () => { const code = codeInput.trim().toLowerCase(); if (code.length < 2) return; setHouseholdCode(code); localStorage.setItem("cc_household_code", code); setJoined(true); };
+  const handleJoin = () => { const code = codeInput.trim().toLowerCase(); if (code.length < 2) return; localStorage.setItem("cc_household_code", code); window.location.reload(); };
   const handleLeave = () => { localStorage.removeItem("cc_household_code"); setHouseholdCode(""); setJoined(false); setData(EMPTY_STATE); setCodeInput(""); setLoading(true); };
  
   useEffect(() => { (async () => { try { const raw = localStorage.getItem("cc_scanner_cache"); if (raw) { const cached = JSON.parse(raw); if (cached.timestamp?.slice(0, 10) === today()) { setScannerData(cached.stocks); setScannerTimestamp(cached.timestamp); } } } catch {} })(); }, []);
