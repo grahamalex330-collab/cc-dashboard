@@ -1,53 +1,35 @@
-// ═══════════════════════════════════════════════════════════════════════
-// INSTRUCTIONS: This file contains the FIXED top section of Dashboard.jsx
-// 
-// To apply the fix:
-// 1. Open your current Dashboard.jsx in a text editor
-// 2. Select EVERYTHING from the top of the file down to (but NOT including)
-//    the line that says:  return (
-//    (the main JSX return inside CoveredCallDashboard, after "if (loading)")
-// 3. Replace that selection with the ENTIRE contents of this file
-// 4. The rest of your file (the return JSX and all form components) stays as-is
-//
-// What changed: The 4 hooks (2 useEffects + 2 useCallbacks) that were
-// AFTER the "if (!joined) return" block have been moved BEFORE it.
-// This fixes a React Rules of Hooks violation that prevented data
-// from loading after entering the household code.
-// ═══════════════════════════════════════════════════════════════════════
-
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Area } from "recharts";
 import { Plus, X, TrendingUp, DollarSign, Calendar, AlertTriangle, ChevronDown, ChevronRight, BarChart3, List, Eye, Shield, Clock, Target, Trash2, Check, Edit2, RefreshCw, Zap, HelpCircle, Info } from "lucide-react";
-
+ 
 const TABS = ["Dashboard", "Positions", "Trade Log", "Watchlist", "Analytics", "Tax View"];
-
+ 
 const GLOSSARY = {
   coveredCall: "A strategy where you own shares and sell (write) a call option against them. You collect premium upfront in exchange for agreeing to sell your shares at the strike price if the option is exercised.",
   strike: "The price at which your shares will be sold if the option is exercised (assigned). Choose a strike above the current price to stay 'out of the money.'",
-  premium: "The cash you receive upfront for selling the call option. This is yours to keep no matter what happens. Quoted per share — multiply by 100 for the total per contract.",
-  dte: "Days to Expiration — how many calendar days until the option expires. Weekly options typically have 5-7 DTE. Less time = faster decay in your favor.",
-  ivRank: "Implied Volatility Rank — measures where current IV sits relative to the past year (0-100). Above 50 means IV is historically high, which means richer premiums for selling calls.",
-  currentIV: "Implied Volatility — the market's expectation of how much the stock will move. Higher IV = higher premiums. Expressed as an annualized percentage.",
+  premium: "The cash you receive upfront for selling the call option. This is yours to keep no matter what happens. Quoted per share \u2014 multiply by 100 for the total per contract.",
+  dte: "Days to Expiration \u2014 how many calendar days until the option expires. Weekly options typically have 5-7 DTE. Less time = faster decay in your favor.",
+  ivRank: "Implied Volatility Rank \u2014 measures where current IV sits relative to the past year (0-100). Above 50 means IV is historically high, which means richer premiums for selling calls.",
+  currentIV: "Implied Volatility \u2014 the market's expectation of how much the stock will move. Higher IV = higher premiums. Expressed as an annualized percentage.",
   costBasis: "Your average purchase price per share. Premium collected from covered calls effectively lowers this over time.",
   effectiveBasis: "Your cost basis minus all premium collected. This is your true break-even price after accounting for income from selling calls.",
-  otm: "Out of the Money — when the stock price is below your strike price. This is where you want your call to stay so it expires worthless and you keep the shares + premium.",
-  itm: "In the Money — when the stock price is above your strike price. Your call is at risk of being assigned, meaning your shares could be called away.",
+  otm: "Out of the Money \u2014 when the stock price is below your strike price. This is where you want your call to stay so it expires worthless and you keep the shares + premium.",
+  itm: "In the Money \u2014 when the stock price is above your strike price. Your call is at risk of being assigned, meaning your shares could be called away.",
   assignment: "When the option buyer exercises their right to buy your shares at the strike price. This happens when the call is ITM at expiration (or sometimes early).",
   rollForward: "Closing your current call (buying to close) and simultaneously opening a new one at a later expiration and/or different strike. Used to avoid assignment or collect more premium.",
   washSale: "An IRS rule: if you sell a security at a loss and buy a 'substantially identical' security within 30 days before or after, the loss is disallowed for tax purposes.",
-  annualizedYield: "Your premium income projected over a full year. Calculated as: (premium collected / capital deployed) × (365 / days active). Helps compare returns across different holding periods.",
+  annualizedYield: "Your premium income projected over a full year. Calculated as: (premium collected / capital deployed) \u00d7 (365 / days active). Helps compare returns across different holding periods.",
   contracts: "Each options contract represents 100 shares. So 1 contract on a $50 stock covers $5,000 worth of shares.",
   breakeven: "The stock price at which you neither make nor lose money on the combined position (shares + call). Equals your cost basis minus premium received.",
   assignmentRisk: "How likely your call is to be assigned. Based on how close the stock price is to your strike. ITM = very high risk. Within 2% = high. 2-5% = moderate. 5%+ = low.",
   capitalUtilization: "What percentage of your stock positions currently have calls written against them. Higher = more income generation. 100% means every position is covered.",
   concentration: "How much of your total portfolio is in a single stock. Over 40% in one name increases your risk if that stock drops significantly.",
-  volumeVsAvg: "Trading volume compared to the stock's average daily volume. Values above 1.5x suggest unusual activity — often driven by news, earnings, or institutional interest — which typically means better options liquidity and premiums.",
-  volScore: "Volatility Score (0-100) — a composite measure of how attractive a stock is for selling covered calls. Based on: 52-week price range (25 pts), 30-day momentum (20 pts), beta (20 pts), upcoming catalysts like earnings (20 pts), and unusual volume (15 pts). Higher = fatter premiums likely.",
+  volumeVsAvg: "Trading volume compared to the stock's average daily volume. Values above 1.5x suggest unusual activity \u2014 often driven by news, earnings, or institutional interest \u2014 which typically means better options liquidity and premiums.",
+  volScore: "Volatility Score (0-100) \u2014 a composite measure of how attractive a stock is for selling covered calls. Based on: 52-week price range (25 pts), 30-day momentum (20 pts), beta (20 pts), upcoming catalysts like earnings (20 pts), and unusual volume (15 pts). Higher = fatter premiums likely.",
   beta: "Beta measures how much a stock moves relative to the S&P 500. Beta of 1.0 = moves with the market. Above 1.5 = significantly more volatile (better CC premiums). Below 0.8 = relatively stable.",
   range52w: "The stock's 52-week price range expressed as a percentage of current price. A wider range indicates higher historical volatility. Stocks with 50%+ range tend to have richer option premiums.",
 };
-
-// ── Call-to-position matching ──
+ 
 const callsForPosition = (position, allPositions, allCalls) => {
   const t = position.ticker.toUpperCase();
   const tickerPositions = allPositions.filter(p => p.ticker.toUpperCase() === t).sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
@@ -60,7 +42,7 @@ const callsForPosition = (position, allPositions, allCalls) => {
     return activeAtTime.some(tp => tp.id === position.id);
   });
 };
-
+ 
 const weightedPremium = (position, allPositions, allCalls) => {
   const t = position.ticker.toUpperCase();
   const tickerPositions = allPositions.filter(p => p.ticker.toUpperCase() === t).sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
@@ -75,7 +57,7 @@ const weightedPremium = (position, allPositions, allCalls) => {
   });
   return total;
 };
-
+ 
 const computeVolScore = ({ price, yearHigh, yearLow, beta, move30dPct, volume, avgVolume, daysToEarnings }) => {
   const rangePct = price > 0 ? ((yearHigh - yearLow) / price) * 100 : 0;
   const rangeScore = Math.min(25, rangePct * 0.25);
@@ -88,9 +70,9 @@ const computeVolScore = ({ price, yearHigh, yearLow, beta, move30dPct, volume, a
   const volumeScore = volRatio >= 3 ? 15 : volRatio >= 2 ? 12 : volRatio >= 1.5 ? 9 : volRatio >= 1.0 ? 5 : 2;
   return Math.round(rangeScore + momentumScore + betaScore + catalystScore + volumeScore);
 };
-
-const fmtMktCap = (mc) => { if (!mc) return "—"; if (mc >= 1e12) return `${(mc / 1e12).toFixed(1)}T`; if (mc >= 1e9) return `${(mc / 1e9).toFixed(0)}B`; if (mc >= 1e6) return `${(mc / 1e6).toFixed(0)}M`; return String(mc); };
-
+ 
+const fmtMktCap = (mc) => { if (!mc) return "\u2014"; if (mc >= 1e12) return `${(mc / 1e12).toFixed(1)}T`; if (mc >= 1e9) return `${(mc / 1e9).toFixed(0)}B`; if (mc >= 1e6) return `${(mc / 1e6).toFixed(0)}M`; return String(mc); };
+ 
 const generateWhy = ({ volRatio, beta, daysToEarnings, move30dPct, rangePct }) => {
   const r = [];
   if (volRatio >= 2) r.push(`Volume ${volRatio.toFixed(1)}x avg`);
@@ -99,9 +81,9 @@ const generateWhy = ({ volRatio, beta, daysToEarnings, move30dPct, rangePct }) =
   if (Math.abs(move30dPct) >= 10) r.push(`${move30dPct > 0 ? "Up" : "Down"} ${Math.abs(move30dPct).toFixed(0)}% in 30d`);
   if (rangePct >= 50) r.push(`Wide 52w range (${rangePct.toFixed(0)}%)`);
   if (r.length === 0 && beta >= 1.2) r.push(`Moderate beta ${beta.toFixed(2)}`);
-  return r.join(" · ") || "Covered call candidate";
+  return r.join(" \u00b7 ") || "Covered call candidate";
 };
-
+ 
 const enrichFromFMP = (q, p) => {
   const price = q.price || 0, yearHigh = q.yearHigh || 0, yearLow = q.yearLow || 0, beta = p?.beta || 1;
   const volume = q.volume || 0, avgVolume = p?.volAvg || q.avgVolume || 0, priceAvg50 = q.priceAvg50 || price;
@@ -112,9 +94,9 @@ const enrichFromFMP = (q, p) => {
   const ea = q.earningsAnnouncement || p?.earningsAnnouncement;
   if (ea) { const d = Math.ceil((new Date(ea) - new Date()) / 86400000); if (d >= 0) daysToEarnings = d; }
   const volScore = computeVolScore({ price, yearHigh, yearLow, beta, move30dPct, volume, avgVolume, daysToEarnings });
-  return { sector: p?.sector || "", price, volScore, beta: beta ? parseFloat(beta.toFixed(2)) : 0, move30d: `${move30dPct >= 0 ? "+" : ""}${move30dPct.toFixed(1)}%`, range52w: `${rangePct.toFixed(0)}%`, volumeVsAvg: avgVolume > 0 ? `${volRatio.toFixed(1)}x` : "—", near52wHigh: yearHigh > 0 && price >= yearHigh * 0.9, nextEarnings: daysToEarnings != null && daysToEarnings <= 30 ? `${daysToEarnings}d` : "", marketCap: fmtMktCap(q.marketCap), why: generateWhy({ volRatio, beta, daysToEarnings, move30dPct, rangePct }) };
+  return { sector: p?.sector || "", price, volScore, beta: beta ? parseFloat(beta.toFixed(2)) : 0, move30d: `${move30dPct >= 0 ? "+" : ""}${move30dPct.toFixed(1)}%`, range52w: `${rangePct.toFixed(0)}%`, volumeVsAvg: avgVolume > 0 ? `${volRatio.toFixed(1)}x` : "\u2014", near52wHigh: yearHigh > 0 && price >= yearHigh * 0.9, nextEarnings: daysToEarnings != null && daysToEarnings <= 30 ? `${daysToEarnings}d` : "", marketCap: fmtMktCap(q.marketCap), why: generateWhy({ volRatio, beta, daysToEarnings, move30dPct, rangePct }) };
 };
-
+ 
 const Tip = ({ term, children }) => {
   const [show, setShow] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -135,9 +117,9 @@ const Tip = ({ term, children }) => {
     </span>
   );
 };
-
+ 
 const EtradeTip = ({ children }) => (<div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 flex items-start gap-2.5"><Info size={16} className="text-indigo-500 mt-0.5 shrink-0" /><div className="text-xs text-indigo-800 leading-relaxed">{children}</div></div>);
-
+ 
 const formatCurrency = (n) => { if (n === undefined || n === null || isNaN(n)) return "$0.00"; return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n); };
 const formatPct = (n) => (n === undefined || isNaN(n) ? "0.00%" : (n * 100).toFixed(2) + "%");
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
@@ -147,9 +129,9 @@ const isExpired = (exp) => new Date(exp) < new Date(today());
 const grossPrem = (c) => c.totalPremium != null ? c.totalPremium : c.premium * c.contracts * 100;
 const closeCostOf = (c) => c.totalCloseCost != null ? c.totalCloseCost : (c.status === "closed" ? (c.closePrice || 0) * c.contracts * 100 : 0);
 const netPrem = (c) => grossPrem(c) - closeCostOf(c);
-
+ 
 const EMPTY_STATE = { positions: [], calls: [], watchlist: [], events: [], nextId: 1 };
-
+ 
 const StatusBadge = ({ status }) => {
   const colors = { open: "bg-blue-100 text-blue-800", expired: "bg-green-100 text-green-800", closed: "bg-yellow-100 text-yellow-800", assigned: "bg-red-100 text-red-800" };
   return (<span className={`text-xs font-medium px-2 py-0.5 rounded-full ${colors[status] || "bg-gray-100 text-gray-700"}`}>{status.charAt(0).toUpperCase() + status.slice(1)}</span>);
@@ -161,7 +143,7 @@ const Field = ({ label, children }) => (<div className="space-y-1"><label classN
 const Input = (props) => (<input {...props} className={`w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${props.className || ""}`} />);
 const Select = ({ options, ...props }) => (<select {...props} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">{options.map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}</select>);
 const Btn = ({ children, variant = "primary", size = "md", ...props }) => { const base = "inline-flex items-center justify-center font-medium rounded-lg transition-colors gap-1.5"; const variants = { primary: "bg-gray-900 text-white hover:bg-gray-800", secondary: "bg-gray-100 text-gray-700 hover:bg-gray-200", danger: "bg-red-50 text-red-700 hover:bg-red-100", ghost: "text-gray-600 hover:bg-gray-100" }; const sizes = { sm: "text-xs px-2.5 py-1.5", md: "text-sm px-4 py-2" }; return <button {...props} className={`${base} ${variants[variant]} ${sizes[size]} ${props.className || ""}`}>{children}</button>; };
-
+ 
 export default function CoveredCallDashboard() {
   const [householdCode, setHouseholdCode] = useState(() => localStorage.getItem("cc_household_code") || "");
   const [codeInput, setCodeInput] = useState("");
@@ -189,7 +171,7 @@ export default function CoveredCallDashboard() {
   const [pricesTimestamp, setPricesTimestamp] = useState(null);
   const [syncStatus, setSyncStatus] = useState(null);
   const [showImport, setShowImport] = useState(false);
-
+ 
   const fetchLivePrices = useCallback(async () => {
     const callTickers = data.calls.filter(c => c.status === "open").map(c => c.ticker);
     const posTickers = data.positions.filter(p => !p.removed).map(p => p.ticker);
@@ -206,7 +188,7 @@ export default function CoveredCallDashboard() {
     } catch (err) { console.error("Price fetch error:", err); }
     setPricesLoading(false);
   }, [data.calls, data.positions]);
-
+ 
   useEffect(() => {
     if (!joined || !householdCode) return;
     (async () => {
@@ -214,34 +196,30 @@ export default function CoveredCallDashboard() {
       setLoading(false);
     })();
   }, [joined, householdCode]);
-
+ 
   const save = useCallback(async (newData) => {
     setData(newData);
     setSyncStatus("saving");
     try { await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: householdCode, data: newData }) }); setSyncStatus("saved"); setTimeout(() => setSyncStatus(null), 2000); } catch { setSyncStatus("error"); }
   }, [householdCode]);
-
+ 
   const handleJoin = () => { const code = codeInput.trim().toLowerCase(); if (code.length < 2) return; setHouseholdCode(code); localStorage.setItem("cc_household_code", code); setJoined(true); };
   const handleLeave = () => { localStorage.removeItem("cc_household_code"); setHouseholdCode(""); setJoined(false); setData(EMPTY_STATE); setCodeInput(""); setLoading(true); };
-
-  // ═══════════════════════════════════════════════════════
-  // FIX: These 4 hooks MUST be before the if(!joined) return
-  // ═══════════════════════════════════════════════════════
-
+ 
   useEffect(() => { (async () => { try { const raw = localStorage.getItem("cc_scanner_cache"); if (raw) { const cached = JSON.parse(raw); if (cached.timestamp?.slice(0, 10) === today()) { setScannerData(cached.stocks); setScannerTimestamp(cached.timestamp); } } } catch {} })(); }, []);
-
+ 
   useEffect(() => {
     const hasOpenCalls = data.calls.some(c => c.status === "open");
     const cacheAge = pricesTimestamp ? (Date.now() - new Date(pricesTimestamp).getTime()) / 60000 : 999;
     if (tab === "Dashboard" && hasOpenCalls && !pricesLoading && !loading && cacheAge > 5) fetchLivePrices();
   }, [tab, loading, data.calls]);
-
+ 
   const fetchScannerData = useCallback(async () => {
     setScannerLoading(true); setScannerError(null);
     try {
       const existingTickers = [...data.watchlist.map(w => w.ticker.toUpperCase()), ...data.positions.map(p => p.ticker.toUpperCase())];
       const excludeNote = existingTickers.length > 0 ? ` Exclude: ${existingTickers.join(", ")}.` : "";
-      const response = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2000, system: `You are a stock screener. Search the web for 10 US stocks that are good covered call candidates right now — look for high options volume, big recent price moves, or upcoming earnings. Market cap over $2B, price over $10.\n\nIMPORTANT: Your ENTIRE response must be a valid JSON array and nothing else. No explanation, no markdown, no text before or after. Just the JSON array.\n\nFormat: [{"ticker":"XXX","sector":"Tech","price":45.2,"marketCap":"12B","volScore":78,"volumeVsAvg":"2.3x","move30d":"+15%","near52wHigh":true,"nextEarnings":"Feb 25","why":"One sentence reason"}]\n\nvolScore should be 0-100 estimating covered call attractiveness based on volatility, options activity, and catalysts.`, messages: [{ role: "user", content: `Top 10 CC candidates now.${excludeNote} Date: ${new Date().toLocaleDateString()}.` }], tools: [{ type: "web_search_20250305", name: "web_search" }] }) });
+      const response = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2000, system: "You are a stock screener. Search the web for 10 US stocks that are good covered call candidates right now \u2014 look for high options volume, big recent price moves, or upcoming earnings. Market cap over $2B, price over $10.\n\nIMPORTANT: Your ENTIRE response must be a valid JSON array and nothing else. No explanation, no markdown, no text before or after. Just the JSON array.\n\nFormat: [{\"ticker\":\"XXX\",\"sector\":\"Tech\",\"price\":45.2,\"marketCap\":\"12B\",\"volScore\":78,\"volumeVsAvg\":\"2.3x\",\"move30d\":\"+15%\",\"near52wHigh\":true,\"nextEarnings\":\"Feb 25\",\"why\":\"One sentence reason\"}]\n\nvolScore should be 0-100 estimating covered call attractiveness based on volatility, options activity, and catalysts.", messages: [{ role: "user", content: `Top 10 CC candidates now.${excludeNote} Date: ${new Date().toLocaleDateString()}.` }], tools: [{ type: "web_search_20250305", name: "web_search" }] }) });
       const result = await response.json();
       if (!response.ok) { setScannerError(result?.error?.message || `Error ${response.status}`); setScannerLoading(false); return; }
       const text = (result.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n");
@@ -252,7 +230,7 @@ export default function CoveredCallDashboard() {
     } catch (err) { console.error("Scanner error:", err); setScannerError(err.message || "Failed to load"); }
     setScannerLoading(false);
   }, [data.watchlist, data.positions]);
-
+ 
   const fetchWatchlistScores = useCallback(async () => {
     const tickers = data.watchlist.map(w => w.ticker.toUpperCase());
     if (tickers.length === 0) return;
@@ -260,18 +238,69 @@ export default function CoveredCallDashboard() {
     try {
       const fmpResults = await Promise.all(tickers.map(async (t) => { try { const [qResp, pResp] = await Promise.all([fetch(`/api/fmp?action=quote&tickers=${t}`), fetch(`/api/fmp?action=profile&tickers=${t}`)]); const q = await qResp.json().then(d => Array.isArray(d) && d[0] || null); const p = await pResp.json().then(d => Array.isArray(d) && d[0] || null); return { ticker: t, q, p }; } catch { return { ticker: t, q: null, p: null }; } }));
       let aiData = {};
-      try { const aiResp = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 500, system: `For each ticker, find next earnings date and current volume vs 30-day average volume ratio. Return ONLY JSON: {"AAPL":{"nextEarnings":"Apr 24","volumeVsAvg":"1.4x"},...} JSON only.`, messages: [{ role: "user", content: `${tickers.join(",")}. Date: ${new Date().toLocaleDateString()}.` }], tools: [{ type: "web_search_20250305", name: "web_search" }] }) }); const aiResult = await aiResp.json(); if (aiResp.ok) { const text = (aiResult.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n"); const clean = text.replace(/```json|```/g, "").trim(); try { aiData = JSON.parse(clean); } catch { const m = clean.match(/\{[\s\S]*\}/); if (m) aiData = JSON.parse(m[0]); } } } catch (err) { console.error("AI supplement error:", err); }
+      try { const aiResp = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 500, system: "For each ticker, find next earnings date and current volume vs 30-day average volume ratio. Return ONLY JSON: {\"AAPL\":{\"nextEarnings\":\"Apr 24\",\"volumeVsAvg\":\"1.4x\"},...} JSON only.", messages: [{ role: "user", content: `${tickers.join(",")}. Date: ${new Date().toLocaleDateString()}.` }], tools: [{ type: "web_search_20250305", name: "web_search" }] }) }); const aiResult = await aiResp.json(); if (aiResp.ok) { const text = (aiResult.content || []).map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n"); const clean = text.replace(/```json|```/g, "").trim(); try { aiData = JSON.parse(clean); } catch { const m = clean.match(/\{[\s\S]*\}/); if (m) aiData = JSON.parse(m[0]); } } } catch (err) { console.error("AI supplement error:", err); }
       const updated = data.watchlist.map(w => { const r = fmpResults.find(r => r.ticker === w.ticker.toUpperCase()); if (!r?.q) return w; const enriched = enrichFromFMP(r.q, r.p); const ai = aiData[w.ticker.toUpperCase()] || {}; return { ...w, ...enriched, volumeVsAvg: ai.volumeVsAvg || enriched.volumeVsAvg, nextEarnings: ai.nextEarnings || enriched.nextEarnings, dateScored: today() }; });
       setData(prev => ({ ...prev, watchlist: updated }));
     } catch (err) { console.error("Watchlist scores error:", err); }
     setWatchlistScoresLoading(false);
   }, [data.watchlist]);
-
-  // ═══════════════════════════════════════════════════════
-  // Conditional return is now AFTER all hooks — safe!
-  // ═══════════════════════════════════════════════════════
-
+ 
+  const nextId = () => data.nextId;
+  const addPosition = (pos) => { const id = data.nextId; save({ ...data, positions: [...data.positions, { ...pos, id }], nextId: id + 1 }); };
+  const updatePosition = (id, updates) => save({ ...data, positions: data.positions.map((p) => (p.id === id ? { ...p, ...updates } : p)) });
+  const removePosition = (id) => save({ ...data, positions: data.positions.filter((p) => p.id !== id) });
+  const addCall = (call) => { const id = data.nextId; save({ ...data, calls: [...data.calls, { ...call, id, status: "open" }], nextId: id + 1 }); };
+  const addPastCall = (call) => { const id = data.nextId; save({ ...data, calls: [...data.calls, { ...call, id }], nextId: id + 1 }); };
+  const updateCall = (id, updates) => save({ ...data, calls: data.calls.map(c => c.id === id ? { ...c, ...updates } : c) });
+  const closeCall = (id, action, closePrice = 0) => save({ ...data, calls: data.calls.map((c) => c.id === id ? { ...c, status: action, dateClosed: today(), closePrice: parseFloat(closePrice) || 0 } : c) });
+  const addWatchlistItem = (item) => { const id = data.nextId; save({ ...data, watchlist: [...data.watchlist, { ...item, id }], nextId: id + 1 }); };
+  const removeWatchlistItem = (id) => save({ ...data, watchlist: data.watchlist.filter((w) => w.id !== id) });
+  const addEvent = (event) => { const id = data.nextId; save({ ...data, events: [...data.events, { ...event, id }], nextId: id + 1 }); };
+  const removeEvent = (id) => save({ ...data, events: data.events.filter((e) => e.id !== id) });
+ 
+  const activePositions = data.positions;
+  const openCalls = data.calls.filter((c) => c.status === "open");
+  const closedCalls = data.calls.filter((c) => c.status !== "open");
+  const totalPremiumCollected = data.calls.reduce((sum, c) => { const prem = grossPrem(c); if (c.status === "closed") return sum + prem - closeCostOf(c); if (c.status === "open") return sum; return sum + prem; }, 0);
+  const totalCapitalEverDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
+  const totalCapitalDeployed = activePositions.reduce((sum, p) => { const pCalls = callsForPosition(p, activePositions, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); return sum + p.costBasis * (p.shares - assignedShares); }, 0);
+  const activeCalls = openCalls.length;
+  const upcomingEvents = data.events.filter((e) => new Date(e.date) >= new Date(today())).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 8);
+ 
+  const premiumByWeek = useMemo(() => { const weeks = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const [y, m, d] = (dateStr || "").split("-").map(Number); if (!y) return; const dt = new Date(y, m - 1, d); const weekStart = new Date(dt); weekStart.setDate(dt.getDate() - dt.getDay()); const key = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`; weeks[key] = (weeks[key] || 0) + netPrem(c); }); const sorted = Object.entries(weeks).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([week, amount]) => { cum += amount; return { week: week.slice(5), amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
+  const premiumByMonth = useMemo(() => { const months = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const key = (dateStr || "").slice(0, 7); if (!key || key.length < 7) return; months[key] = (months[key] || 0) + netPrem(c); }); const sorted = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([month, amount]) => { cum += amount; return { month, amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
+  const taxData = useMemo(() => data.calls.filter(c => c.status !== "open").map((c) => { const held = daysBetween(c.dateOpened, c.dateClosed || today()); const net = netPrem(c); const treatment = held > 365 ? "Long-term" : "Short-term"; const isLoss = net < 0; const nearbyTrades = data.calls.filter((o) => o.id !== c.id && o.ticker === c.ticker && Math.abs(daysBetween(c.dateClosed || today(), o.dateOpened)) <= 30); return { ...c, held, net, treatment, washSaleRisk: isLoss && nearbyTrades.length > 0 }; }), [data.calls]);
+  const annualizedYield = useMemo(() => { if (totalCapitalEverDeployed === 0) return 0; const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return 0; const daysSinceFirst = daysBetween(allDates[0], today()); if (daysSinceFirst <= 0) return 0; return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst); }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
+  const weeklyPL = useMemo(() => { const now = new Date(); const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`; const thisWeekCalls = data.calls.filter(c => { if (c.status === "open") return false; return (c.dateClosed || c.dateOpened) >= startKey; }); return { premium: thisWeekCalls.reduce((sum, c) => sum + netPrem(c), 0), trades: thisWeekCalls.length, callsWritten: data.calls.filter(c => (c.dateOpened || "") >= startKey).length }; }, [data.calls]);
+  const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const pCalls = callsForPosition(p, activePositions, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => data.calls.some(c => c.status === "open" && c.ticker.toUpperCase() === t)).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio \u2014 heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of portfolio \u2014 consider diversifying.` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
+ 
+  // ALL hooks are above this line. Conditional returns are safe below.
+ 
   if (!joined) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-md w-full space-y-6">
+          <div className="text-center">
+            <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mx-auto mb-4"><TrendingUp className="text-white" size={24} /></div>
+            <h1 className="text-2xl font-bold text-gray-900">Covered Call Dashboard</h1>
+            <p className="text-sm text-gray-500 mt-2">Enter a household code to get started. Anyone with the same code shares the same data.</p>
+          </div>
+          <div className="space-y-3">
+            <label className="block text-sm font-medium text-gray-700">Household Code</label>
+            <input type="text" value={codeInput} onChange={(e) => setCodeInput(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} onKeyDown={(e) => e.key === "Enter" && handleJoin()} placeholder="e.g. smith-family" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent text-lg" autoFocus />
+            <p className="text-xs text-gray-400">Letters, numbers, and dashes only. Share this code with your partner so you see the same dashboard.</p>
+          </div>
+          <button onClick={handleJoin} disabled={codeInput.trim().length < 2} className="w-full py-3 bg-gray-900 text-white rounded-xl font-medium hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">Enter Dashboard</button>
+        </div>
+      </div>
+    );
+  }
+ 
+  if (loading) { return (<div className="min-h-screen bg-gray-50 flex items-center justify-center"><div className="animate-pulse text-gray-400">Loading dashboard...</div></div>); }
+ 
+// THIS IS THE TOP SECTION. The return() JSX and form components below are
+// IDENTICAL to your current file. Replace everything above this comment
+// in your GitHub file, keeping everything from "return (" onwards as-is.
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 max-w-md w-full space-y-6">
