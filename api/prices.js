@@ -110,34 +110,37 @@ export default async function handler(req, res) {
     }
   });
 
-  // 3. Refetch stale tickers from FMP (single batched call)
+  // 3. Refetch stale tickers from FMP — free tier requires ONE call per ticker.
+  //    Fan out in parallel. Cache-miss storm avoidance isn't a concern at current scale.
   const fmpResults = {};
   let fmpFailed = false;
   if (stale.length > 0) {
-    try {
-      const fmpUrl = `${FMP_BASE}/quote?symbol=${stale.join(",")}&apikey=${FMP_API_KEY}`;
-      const fmpResp = await fetch(fmpUrl);
-      if (fmpResp.ok) {
-        const fmpData = await fmpResp.json();
-        if (Array.isArray(fmpData)) {
-          fmpData.forEach(q => {
-            if (q && q.symbol && typeof q.price === "number") {
-              fmpResults[q.symbol.toUpperCase()] = {
-                price: q.price,
-                change: typeof q.change === "number" ? q.change : 0,
-                changePct: typeof q.changesPercentage === "number" ? q.changesPercentage : 0,
-              };
-            }
-          });
+    const fmpCalls = await Promise.all(stale.map(async (ticker) => {
+      try {
+        const url = `${FMP_BASE}/quote?symbol=${ticker}&apikey=${FMP_API_KEY}`;
+        const resp = await fetch(url);
+        if (!resp.ok) return { ticker, ok: false };
+        const data = await resp.json();
+        if (!Array.isArray(data) || !data[0] || typeof data[0].price !== "number") {
+          return { ticker, ok: false };
         }
-      } else {
-        fmpFailed = true;
-        console.error("FMP non-OK:", fmpResp.status, await fmpResp.text().catch(() => ""));
+        const q = data[0];
+        // FMP free tier returns price + change only; compute changePct ourselves.
+        const change = typeof q.change === "number" ? q.change : 0;
+        const prevClose = q.price - change;
+        const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
+        return { ticker, ok: true, price: q.price, change, changePct };
+      } catch (e) {
+        return { ticker, ok: false };
       }
-    } catch (e) {
-      fmpFailed = true;
-      console.error("FMP call threw:", e);
-    }
+    }));
+    fmpCalls.forEach(r => {
+      if (r.ok) {
+        fmpResults[r.ticker] = { price: r.price, change: r.change, changePct: r.changePct };
+      } else {
+        fmpFailed = true; // at least one call failed — surface to frontend
+      }
+    });
   }
 
   // 4. Upsert fresh FMP results into cache
