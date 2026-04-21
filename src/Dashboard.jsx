@@ -290,7 +290,137 @@ export default function CoveredCallDashboard() {
   const annualizedYield = useMemo(() => { if (totalCapitalEverDeployed === 0) return 0; const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return 0; const daysSinceFirst = daysBetween(allDates[0], today()); if (daysSinceFirst <= 0) return 0; return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst); }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
   const weeklyPL = useMemo(() => { const now = new Date(); const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`; const thisWeekCalls = data.calls.filter(c => { if (c.status === "open") return false; return (c.dateClosed || c.dateOpened) >= startKey; }); return { premium: thisWeekCalls.reduce((sum, c) => sum + netPrem(c), 0), trades: thisWeekCalls.length, callsWritten: data.calls.filter(c => (c.dateOpened || "") >= startKey).length }; }, [data.calls]);
   const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const pCalls = callsForPosition(p, activePositions, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => data.calls.some(c => c.status === "open" && c.ticker.toUpperCase() === t)).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio \u2014 heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of portfolio \u2014 consider diversifying.` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
- 
+
+  // Per-ticker strategy scorecard — rolls up lots per ticker for the Dashboard command-center view.
+  // Positions tab stays lot-split; this is the summary-where-summary-helps layer.
+  // IMPORTANT: basis and unrealized are computed on ACTIVE shares only.
+  // Fully-assigned lot shares don't exist anymore — their cost basis must not pollute the active avg.
+  const scorecard = useMemo(() => {
+    if (activePositions.length === 0) return [];
+    const grouped = {};
+    activePositions.forEach(p => {
+      const t = p.ticker.toUpperCase();
+      const pCalls = callsForPosition(p, activePositions, data.calls);
+      const assignedSharesLot = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+      const lotActiveShares = Math.max(0, p.shares - assignedSharesLot);
+      const lotActiveCost = p.costBasis * lotActiveShares;
+      const earnedLot = weightedPremium(p, activePositions, data.calls);
+      if (!grouped[t]) grouped[t] = { ticker: p.ticker, totalShares: 0, activeShares: 0, activeCost: 0, assignedShares: 0, premiumEarned: 0 };
+      grouped[t].totalShares += p.shares;
+      grouped[t].activeShares += lotActiveShares;
+      grouped[t].activeCost += lotActiveCost;
+      grouped[t].assignedShares += assignedSharesLot;
+      grouped[t].premiumEarned += earnedLot;
+    });
+    const now = today();
+    return Object.values(grouped).map(g => {
+      const avgBasis = g.activeShares > 0 ? g.activeCost / g.activeShares : 0;
+      const currentPrice = livePrices[g.ticker.toUpperCase()] || null;
+      const unrealized = (currentPrice != null && g.activeShares > 0) ? (currentPrice - avgBasis) * g.activeShares : null;
+      const openCalls = data.calls.filter(c => c.status === "open" && c.ticker.toUpperCase() === g.ticker.toUpperCase());
+      const nearestOpen = openCalls.length > 0
+        ? openCalls.slice().sort((a, b) => (a.expiration || "").localeCompare(b.expiration || ""))[0]
+        : null;
+      let daysUncovered = null;
+      if (openCalls.length === 0 && g.activeShares > 0) {
+        const priorCalls = data.calls.filter(c => c.status !== "open" && c.ticker.toUpperCase() === g.ticker.toUpperCase() && (c.dateClosed || c.expiration));
+        if (priorCalls.length > 0) {
+          const mostRecent = priorCalls.slice().sort((a, b) => (b.dateClosed || b.expiration).localeCompare(a.dateClosed || a.expiration))[0];
+          daysUncovered = Math.max(0, daysBetween(mostRecent.dateClosed || mostRecent.expiration, now));
+        }
+      }
+      let coverage = "uncovered";
+      if (g.activeShares === 0 && g.assignedShares > 0) coverage = "fully_assigned";
+      else if (nearestOpen) coverage = "covered";
+      return {
+        ticker: g.ticker,
+        totalShares: g.totalShares,
+        activeShares: g.activeShares,
+        assignedShares: g.assignedShares,
+        avgBasis,
+        currentPrice,
+        changePct: priceMeta[g.ticker.toUpperCase()]?.changePct ?? null,
+        unrealized,
+        premiumEarned: g.premiumEarned,
+        nearestOpen,
+        openCallCount: openCalls.length,
+        daysUncovered,
+        coverage,
+      };
+    }).sort((a, b) => (b.activeShares * (b.currentPrice || b.avgBasis)) - (a.activeShares * (a.currentPrice || a.avgBasis)));
+  }, [activePositions, data.calls, livePrices, priceMeta]);
+
+  // Alert strip — only the signals that matter for a weekly covered-call writer.
+  // Empty array = nothing renders. No "all healthy" reassurance noise.
+  const alerts = useMemo(() => {
+    const out = [];
+    const now = today();
+    const openCalls = data.calls.filter(c => c.status === "open");
+
+    // 1. Assignment risk — price >= 98% of strike on open calls (HIGH severity, weekly writer's main risk)
+    openCalls.forEach(c => {
+      const px = livePrices[c.ticker.toUpperCase()];
+      if (px != null && c.strike > 0 && px >= c.strike * 0.98) {
+        const pct = ((px / c.strike) * 100).toFixed(1);
+        out.push({
+          key: `assign-${c.id}`,
+          severity: "high",
+          ticker: c.ticker,
+          title: px >= c.strike ? "In the money" : "Near the money",
+          detail: `${c.ticker} $${c.strike} call · ${c.expiration} · price ${pct}% of strike`,
+        });
+      }
+    });
+
+    // 2. Expiring this week — open calls with DTE between 0 and 7 (MEDIUM severity, the daily glance)
+    openCalls.forEach(c => {
+      const dte = daysBetween(now, c.expiration);
+      if (dte >= 0 && dte <= 7) {
+        out.push({
+          key: `exp-${c.id}`,
+          severity: dte <= 1 ? "high" : "medium",
+          ticker: c.ticker,
+          title: dte === 0 ? "Expires today" : dte === 1 ? "Expires tomorrow" : `Expires in ${dte}d`,
+          detail: `${c.ticker} $${c.strike} call · ${c.expiration}`,
+        });
+      }
+    });
+
+    // 3. Earnings within 7 days on covered positions (MEDIUM severity, real wipeout risk)
+    const coveredTickers = new Set(openCalls.map(c => c.ticker.toUpperCase()));
+    (data.events || []).forEach(e => {
+      if (!e.ticker || !e.date) return;
+      if (!coveredTickers.has(e.ticker.toUpperCase())) return;
+      const d = daysBetween(now, e.date);
+      if (d >= 0 && d <= 7) {
+        out.push({
+          key: `earn-${e.id}`,
+          severity: "medium",
+          ticker: e.ticker,
+          title: d === 0 ? `${e.title} today` : `${e.title} in ${d}d`,
+          detail: `${e.ticker} has an open call — earnings risk`,
+        });
+      }
+    });
+
+    // 4. Uncovered >5 days (LOW severity, the "falling stock, didn't re-cover" flag from last year)
+    scorecard.forEach(s => {
+      if (s.coverage === "uncovered" && s.daysUncovered != null && s.daysUncovered > 5 && s.activeShares >= 100) {
+        out.push({
+          key: `unc-${s.ticker}`,
+          severity: "low",
+          ticker: s.ticker,
+          title: `Uncovered ${s.daysUncovered}d`,
+          detail: `${s.ticker} has ${s.activeShares} shares with no open call`,
+        });
+      }
+    });
+
+    // Sort: high severity first, then medium, then low. Deduplicate by ticker+title (in case of edge cases).
+    const order = { high: 0, medium: 1, low: 2 };
+    return out.sort((a, b) => order[a.severity] - order[b.severity]);
+  }, [data.calls, data.events, livePrices, scorecard]);
+
   // ALL hooks are above this line. Conditional returns are safe below.
  
   if (!joined) {
@@ -383,6 +513,105 @@ export default function CoveredCallDashboard() {
                 </span>
               </div>
             )}
+            {/* Phase 2: Alerts — only renders when something actionable exists. No empty-state noise. */}
+            {alerts.length > 0 && (
+              <div className="space-y-2">
+                {alerts.map(a => {
+                  const sev = a.severity === "high"
+                    ? "bg-red-50 border-red-200 text-red-900"
+                    : a.severity === "medium"
+                      ? "bg-amber-50 border-amber-200 text-amber-900"
+                      : "bg-gray-50 border-gray-200 text-gray-700";
+                  const dot = a.severity === "high" ? "bg-red-500" : a.severity === "medium" ? "bg-amber-500" : "bg-gray-400";
+                  return (
+                    <div key={a.key} className={`rounded-lg border px-4 py-2.5 text-sm flex items-center gap-3 ${sev}`}>
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dot}`}></span>
+                      <span className="font-medium">{a.title}</span>
+                      <span className="text-xs opacity-80">— {a.detail}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Phase 2: Per-ticker strategy scorecard — the real decision surface. */}
+            {scorecard.length > 0 && (
+              <Card>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <h3 className="font-semibold text-gray-900">Strategy Scorecard</h3>
+                  <span className="text-xs text-gray-500">Premium earned vs. unrealized P&L — shown separately, never combined</span>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {scorecard.map(s => {
+                    const t = s.ticker.toUpperCase();
+                    const priceDisplay = s.currentPrice != null ? formatCurrency(s.currentPrice) : "—";
+                    const changeColor = s.changePct != null ? (s.changePct >= 0 ? "text-green-600" : "text-red-600") : "text-gray-400";
+                    const unrealizedColor = s.unrealized != null ? (s.unrealized >= 0 ? "text-green-700" : "text-red-700") : "text-gray-400";
+                    const premiumColor = s.premiumEarned >= 0 ? "text-green-700" : "text-gray-700";
+
+                    let statusNode;
+                    if (s.coverage === "covered" && s.nearestOpen) {
+                      const dte = daysBetween(today(), s.nearestOpen.expiration);
+                      const dteLabel = dte === 0 ? "today" : dte === 1 ? "1d" : `${dte}d`;
+                      const callCountLabel = s.openCallCount > 1 ? ` · ${s.openCallCount} open calls` : "";
+                      statusNode = (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+                          Covered · ${s.nearestOpen.strike} · {dteLabel}{callCountLabel}
+                        </span>
+                      );
+                    } else if (s.coverage === "fully_assigned") {
+                      statusNode = <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Fully assigned</span>;
+                    } else if (s.coverage === "uncovered") {
+                      const uncoveredLabel = s.daysUncovered != null ? `Uncovered · ${s.daysUncovered}d` : "Uncovered";
+                      const warn = s.daysUncovered != null && s.daysUncovered > 5;
+                      statusNode = (
+                        <span className={`text-xs px-2 py-0.5 rounded-full border ${warn ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                          {uncoveredLabel}
+                        </span>
+                      );
+                    }
+
+                    return (
+                      <div key={t} className="px-5 py-4 hover:bg-gray-50">
+                        <div className="flex items-baseline justify-between flex-wrap gap-2">
+                          <div className="flex items-baseline gap-3 flex-wrap">
+                            <span className="font-bold text-gray-900 text-base">{s.ticker}</span>
+                            <span className="text-sm text-gray-600">
+                              {s.activeShares.toLocaleString()} sh @ {formatCurrency(s.avgBasis)} avg
+                              {s.assignedShares > 0 && <span className="ml-1 text-xs text-orange-600">({s.assignedShares} assigned)</span>}
+                            </span>
+                            <span className="text-sm font-medium">{priceDisplay}</span>
+                            {s.changePct != null && (
+                              <span className={`text-xs ${changeColor}`}>
+                                {s.changePct >= 0 ? "+" : ""}{s.changePct.toFixed(2)}%
+                              </span>
+                            )}
+                          </div>
+                          {statusNode}
+                        </div>
+                        <div className="flex items-baseline gap-6 mt-2 text-sm flex-wrap">
+                          <div>
+                            <span className="text-xs text-gray-500 uppercase tracking-wide mr-2">Premium</span>
+                            <span className={`font-semibold ${premiumColor}`}>
+                              {s.premiumEarned >= 0 ? "+" : ""}{formatCurrency(s.premiumEarned)}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-xs text-gray-500 uppercase tracking-wide mr-2">Unrealized</span>
+                            <span className={`font-semibold ${unrealizedColor}`}>
+                              {s.unrealized != null
+                                ? `${s.unrealized >= 0 ? "+" : ""}${formatCurrency(s.unrealized)}`
+                                : (s.activeShares === 0 ? "—" : "loading...")}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard icon={DollarSign} label="Total Premium" value={formatCurrency(totalPremiumCollected)} sub="Net collected" color="text-green-700" />
               <StatCard icon={Target} label="Active Calls" value={activeCalls} sub={`${activePositions.length} positions`} />
