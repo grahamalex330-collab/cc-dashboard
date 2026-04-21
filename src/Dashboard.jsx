@@ -166,25 +166,39 @@ export default function CoveredCallDashboard() {
   const [scannerTimestamp, setScannerTimestamp] = useState(null);
   const [scannerError, setScannerError] = useState(null);
   const [watchlistScoresLoading, setWatchlistScoresLoading] = useState(false);
-  const [livePrices, setLivePrices] = useState({});
+  const [livePrices, setLivePrices] = useState({});        // {TICKER: price} — flat map, kept for existing consumers
+  const [priceMeta, setPriceMeta] = useState({});          // {TICKER: {change, changePct, stale, fetchedAt}} — Phase 1 metadata
   const [pricesLoading, setPricesLoading] = useState(false);
   const [pricesTimestamp, setPricesTimestamp] = useState(null);
+  const [marketStatus, setMarketStatus] = useState(null);  // 'open' | 'closed' | null — from /api/prices
+  const [pricesStale, setPricesStale] = useState(false);   // any ticker returned stale data
   const [syncStatus, setSyncStatus] = useState(null);
   const [showImport, setShowImport] = useState(false);
  
   const fetchLivePrices = useCallback(async () => {
     const callTickers = data.calls.filter(c => c.status === "open").map(c => c.ticker);
     const posTickers = data.positions.filter(p => !p.removed).map(p => p.ticker);
-    const tickers = [...new Set([...callTickers, ...posTickers])];
+    const tickers = [...new Set([...callTickers, ...posTickers])].map(t => t.toUpperCase());
     if (tickers.length === 0) return;
     setPricesLoading(true);
     try {
-      const promises = tickers.map(t => fetch(`/api/fmp?action=quote&tickers=${t}`).then(r => r.json()).then(d => (Array.isArray(d) && d[0]) || null).catch(() => null));
-      const results = await Promise.all(promises);
-      const prices = {};
-      results.forEach(q => { if (q?.symbol && q.price) prices[q.symbol] = q.price; });
-      setLivePrices(prices);
-      setPricesTimestamp(new Date().toISOString());
+      const resp = await fetch(`/api/prices?tickers=${tickers.join(",")}`);
+      const json = await resp.json();
+      if (json.prices) {
+        const prices = {};
+        const meta = {};
+        Object.entries(json.prices).forEach(([ticker, p]) => {
+          if (p && typeof p.price === "number") {
+            prices[ticker] = p.price;
+            meta[ticker] = { change: p.change, changePct: p.changePct, stale: p.stale, fetchedAt: p.fetchedAt };
+          }
+        });
+        setLivePrices(prices);
+        setPriceMeta(meta);
+        setPricesTimestamp(new Date().toISOString());
+        setMarketStatus(json.marketStatus || null);
+        setPricesStale(!!json.anyStale);
+      }
     } catch (err) { console.error("Price fetch error:", err); }
     setPricesLoading(false);
   }, [data.calls, data.positions]);
@@ -209,10 +223,13 @@ export default function CoveredCallDashboard() {
   useEffect(() => { (async () => { try { const raw = localStorage.getItem("cc_scanner_cache"); if (raw) { const cached = JSON.parse(raw); if (cached.timestamp?.slice(0, 10) === today()) { setScannerData(cached.stocks); setScannerTimestamp(cached.timestamp); } } } catch {} })(); }, []);
  
   useEffect(() => {
-    const hasOpenCalls = data.calls.some(c => c.status === "open");
+    // Auto-fetch prices on Dashboard or Positions tab when user has active positions.
+    // Respects 5-min cache to avoid re-fetching on every tab switch.
+    const hasPositions = data.positions.some(p => !p.removed);
     const cacheAge = pricesTimestamp ? (Date.now() - new Date(pricesTimestamp).getTime()) / 60000 : 999;
-    if (tab === "Dashboard" && hasOpenCalls && !pricesLoading && !loading && cacheAge > 5) fetchLivePrices();
-  }, [tab, loading, data.calls]);
+    const onPriceTab = tab === "Dashboard" || tab === "Positions";
+    if (onPriceTab && hasPositions && !pricesLoading && !loading && cacheAge > 5) fetchLivePrices();
+  }, [tab, loading, data.calls, data.positions]);
  
   const fetchScannerData = useCallback(async () => {
     setScannerLoading(true); setScannerError(null);
@@ -348,6 +365,18 @@ export default function CoveredCallDashboard() {
         {/* DASHBOARD TAB */}
         {tab === "Dashboard" && (
           <div className="space-y-6">
+            {(marketStatus === "closed" || pricesStale) && Object.keys(livePrices).length > 0 && (
+              <div className={`rounded-lg border px-4 py-2.5 text-sm flex items-center gap-2 ${pricesStale ? "bg-amber-50 border-amber-200 text-amber-900" : "bg-gray-50 border-gray-200 text-gray-700"}`}>
+                <span className="font-medium">
+                  {pricesStale ? "Showing cached prices" : "Market closed"}
+                </span>
+                <span className="text-xs opacity-80">
+                  {pricesStale
+                    ? "— price data source unavailable, values may be out of date"
+                    : "— showing last traded prices"}
+                </span>
+              </div>
+            )}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard icon={DollarSign} label="Total Premium" value={formatCurrency(totalPremiumCollected)} sub="Net collected" color="text-green-700" />
               <StatCard icon={Target} label="Active Calls" value={activeCalls} sub={`${activePositions.length} positions`} />
@@ -631,7 +660,22 @@ export default function CoveredCallDashboard() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-gray-900">Stock Positions</h2>
-              <Btn onClick={() => setShowAddPosition(true)}><Plus size={14} /> Add Stock</Btn>
+              <div className="flex items-center gap-2">
+                {activePositions.length > 0 && pricesTimestamp && (
+                  <span className="text-xs text-gray-400">
+                    Prices: {new Date(pricesTimestamp).toLocaleTimeString()}
+                    {marketStatus === "closed" && <span className="ml-1 text-gray-500">· market closed</span>}
+                    {pricesStale && <span className="ml-1 text-amber-600">· stale</span>}
+                  </span>
+                )}
+                {activePositions.length > 0 && (
+                  <Btn variant="secondary" size="sm" onClick={fetchLivePrices} disabled={pricesLoading}>
+                    <RefreshCw size={12} className={pricesLoading ? "animate-spin" : ""} />
+                    {pricesLoading ? "Updating..." : "Refresh Prices"}
+                  </Btn>
+                )}
+                <Btn onClick={() => setShowAddPosition(true)}><Plus size={14} /> Add Stock</Btn>
+              </div>
             </div>
             <Card>
               <div className="overflow-x-auto">
@@ -644,6 +688,8 @@ export default function CoveredCallDashboard() {
                         <th className="px-5 py-3">Ticker</th>
                         <th className="px-5 py-3">Shares</th>
                         <th className="px-5 py-3"><Tip term="costBasis">Cost Basis</Tip></th>
+                        <th className="px-5 py-3">Current Price</th>
+                        <th className="px-5 py-3">Unrealized P&L</th>
                         <th className="px-5 py-3">Date Acquired</th>
                         <th className="px-5 py-3">Total Investment</th>
                         <th className="px-5 py-3">Total Calls</th>
@@ -665,6 +711,11 @@ export default function CoveredCallDashboard() {
                         const weightedAssignmentProceeds = tickerPositions.length > 1 && assignedShares === 0
                           ? 0 : assignmentProceeds;
                         const effectiveBasis = currentShares > 0 ? (p.costBasis * p.shares - earned - weightedAssignmentProceeds) / currentShares : 0;
+                        // Phase 1: live price + unrealized P&L on remaining shares
+                        const curPrice = livePrices[t] || null;
+                        const unrealizedPL = (curPrice != null && currentShares > 0)
+                          ? (curPrice - p.costBasis) * currentShares
+                          : null;
                         return (
                           <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50">
                             <td className="px-5 py-3 font-bold text-gray-900">{p.ticker}</td>
@@ -677,6 +728,25 @@ export default function CoveredCallDashboard() {
                               ) : p.shares}
                             </td>
                             <td className="px-5 py-3">{formatCurrency(p.costBasis)}</td>
+                            <td className="px-5 py-3">
+                              {curPrice != null ? (
+                                <div>
+                                  <span className="font-medium">{formatCurrency(curPrice)}</span>
+                                  {priceMeta[t] && typeof priceMeta[t].changePct === "number" && (
+                                    <span className={`ml-1 text-xs ${priceMeta[t].changePct >= 0 ? "text-green-600" : "text-red-600"}`}>
+                                      {priceMeta[t].changePct >= 0 ? "+" : ""}{priceMeta[t].changePct.toFixed(2)}%
+                                    </span>
+                                  )}
+                                </div>
+                              ) : <span className="text-gray-400">—</span>}
+                            </td>
+                            <td className="px-5 py-3">
+                              {unrealizedPL != null ? (
+                                <span className={`font-medium ${unrealizedPL >= 0 ? "text-green-700" : "text-red-700"}`}>
+                                  {unrealizedPL >= 0 ? "+" : ""}{formatCurrency(unrealizedPL)}
+                                </span>
+                              ) : currentShares === 0 ? <span className="text-gray-400 text-xs">—</span> : <span className="text-gray-400">—</span>}
+                            </td>
                             <td className="px-5 py-3 text-gray-500">{p.dateAcquired}</td>
                             <td className="px-5 py-3">{formatCurrency(p.costBasis * p.shares)}</td>
                             <td className="px-5 py-3">{pCalls.length}</td>
