@@ -365,7 +365,13 @@ export default function CoveredCallDashboard() {
         {/* DASHBOARD TAB */}
         {tab === "Dashboard" && (
           <div className="space-y-6">
-            {(marketStatus === "closed" || pricesStale) && Object.keys(livePrices).length > 0 && (
+            {pricesTimestamp && Object.keys(livePrices).length === 0 && (
+              <div className="rounded-lg border px-4 py-2.5 text-sm flex items-center gap-2 bg-red-50 border-red-200 text-red-900">
+                <span className="font-medium">Price data unavailable</span>
+                <span className="text-xs opacity-80">— data source failed and no cache available. Risk and P&L columns will be empty. Try Refresh Prices.</span>
+              </div>
+            )}
+            {pricesTimestamp && Object.keys(livePrices).length > 0 && (marketStatus === "closed" || pricesStale) && (
               <div className={`rounded-lg border px-4 py-2.5 text-sm flex items-center gap-2 ${pricesStale ? "bg-amber-50 border-amber-200 text-amber-900" : "bg-gray-50 border-gray-200 text-gray-700"}`}>
                 <span className="font-medium">
                   {pricesStale ? "Showing cached prices" : "Market closed"}
