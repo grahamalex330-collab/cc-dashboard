@@ -1437,13 +1437,13 @@ const totalCapitalDeployed = activePositions.reduce((sum, p) => sum + p.costBasi
               <StatCard icon={TrendingUp} label="Annualized Yield" value={formatPct(annualizedYield)} color="text-green-700" />
               <StatCard icon={BarChart3} label="Total Trades" value={data.calls.length} />
               <StatCard icon={Target} label="Win Rate" value={
-                closedCalls.length > 0
-                  ? `${((closedCalls.filter(c => {
-                      const net = netPrem(c);
-                      return net > 0;
-                    }).length / closedCalls.length) * 100).toFixed(0)}%`
-                  : "—"
-              } sub="Profitable closes" />
+  closedCalls.length > 0
+    ? `${((closedCalls.filter(c => {
+        const pnl = callCyclePnL(c, allPositionsEver, data.calls);
+        return pnl !== null && pnl > 0;
+      }).length / closedCalls.length) * 100).toFixed(0)}%`
+    : "—"
+} sub="Net-positive cycles" />
             </div>
 
             {/* Weekly Chart */}
@@ -1550,7 +1550,7 @@ const totalCapitalDeployed = activePositions.reduce((sum, p) => sum + p.costBasi
 
                 const comparisons = tickers.map(ticker => {
                   // Aggregate position data
-                  const positions = activePositions.filter(p => p.ticker.toUpperCase() === ticker);
+                  const positions = allPositionsEver.filter(p => p.ticker.toUpperCase() === ticker);
                   const totalShares = positions.reduce((s, p) => s + p.shares, 0);
                   const totalCost = positions.reduce((s, p) => s + p.costBasis * p.shares, 0);
                   const avgBasis = totalCost / totalShares;
