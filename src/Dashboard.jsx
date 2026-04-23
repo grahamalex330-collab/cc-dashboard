@@ -747,8 +747,9 @@ return {
               </Card>
             )}
 
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <StatCard icon={DollarSign} label="Total Premium" value={formatCurrency(totalPremiumCollected)} sub="Net collected" color="text-green-700" />
+              <StatCard icon={DollarSign} label="Realized P&L" value={formatCurrency(realizedPnLTotal)} sub="Stock + premium" color={realizedPnLTotal >= 0 ? "text-green-700" : "text-red-700"} />
               <StatCard icon={Target} label="Active Calls" value={activeCalls} sub={`${activePositions.length} positions`} />
               <StatCard icon={TrendingUp} label={<Tip term="annualizedYield">Annualized Yield</Tip>} value={formatPct(annualizedYield)} sub="On deployed capital" color={annualizedYield > 0 ? "text-green-700" : "text-gray-900"} />
               <StatCard icon={DollarSign} label="Capital Deployed" value={formatCurrency(totalCapitalDeployed)} />
