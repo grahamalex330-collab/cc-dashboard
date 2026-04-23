@@ -68,8 +68,95 @@ const buildTickerAttribution = (ticker, allPositions, allCalls) => {
     callToLots.set(call.id, attributed);
   }
   return callToLots;
+}; 
+// ============================================================
+// ANALYTICS HELPERS (added session 3)
+// ============================================================
+
+// Realized stock P&L from assignment disposals, attributed via FIFO.
+// Returns { byTicker: { TICKER: { realized, soldSharesUnknownPrice } }, totalRealized, totalSoldUnknown }
+// Lots sold outside assignments (no closePrice stored) are flagged as soldSharesUnknownPrice.
+const computeRealizedStockPnL = (allPositions, allCalls) => {
+  const byTicker = {};
+  const tickers = [...new Set(allPositions.map(p => p.ticker.toUpperCase()))];
+  for (const t of tickers) {
+    const posns = allPositions.filter(p => p.ticker.toUpperCase() === t);
+    const map = buildTickerAttribution(t, allPositions, allCalls);
+    const lotBasis = new Map(posns.map(p => [p.id, p.costBasis]));
+    const lotConsumedShares = new Map(posns.map(p => [p.id, 0]));
+    let realized = 0;
+    for (const call of allCalls) {
+      if (call.ticker.toUpperCase() !== t || call.status !== 'assigned') continue;
+      const attr = map.get(call.id) || [];
+      for (const a of attr) {
+        realized += (call.strike - (lotBasis.get(a.posId) || 0)) * a.shares;
+        lotConsumedShares.set(a.posId, (lotConsumedShares.get(a.posId) || 0) + a.shares);
+      }
+    }
+    const soldSharesUnknownPrice = posns
+      .filter(p => p.removed)
+      .reduce((s, p) => s + Math.max(0, p.shares - (lotConsumedShares.get(p.id) || 0)), 0);
+    byTicker[t] = { realized, soldSharesUnknownPrice };
+  }
+  const totalRealized = Object.values(byTicker).reduce((s, v) => s + v.realized, 0);
+  const totalSoldUnknown = Object.values(byTicker).reduce((s, v) => s + v.soldSharesUnknownPrice, 0);
+  return { byTicker, totalRealized, totalSoldUnknown };
 };
 
+// Per-call cycle P&L. Used for Win Rate.
+// expired → premium (always positive); assigned → premium + (strike - basis) × shares consumed.
+const callCyclePnL = (call, allPositions, allCalls) => {
+  if (call.status === 'open') return null;
+  const prem = netPrem(call);
+  if (call.status === 'expired') return prem;
+  if (call.status === 'assigned') {
+    const map = buildTickerAttribution(call.ticker, allPositions, allCalls);
+    const attr = map.get(call.id) || [];
+    const lotBasis = new Map(
+      allPositions
+        .filter(p => p.ticker.toUpperCase() === call.ticker.toUpperCase())
+        .map(p => [p.id, p.costBasis])
+    );
+    const stockPnL = attr.reduce(
+      (s, a) => s + (call.strike - (lotBasis.get(a.posId) || 0)) * a.shares,
+      0
+    );
+    return prem + stockPnL;
+  }
+  return null;
+};
+
+// Pending premium from open (unrealized) calls, by ticker and total.
+const computePendingPremium = (allCalls) => {
+  const byTicker = {};
+  let total = 0;
+  for (const c of allCalls) {
+    if (c.status !== 'open') continue;
+    const prem = (c.premium || 0) * (c.contracts || 0) * 100;
+    const t = c.ticker.toUpperCase();
+    byTicker[t] = (byTicker[t] || 0) + prem;
+    total += prem;
+  }
+  return { byTicker, total };
+};
+
+// Assignment rate: assigned / closed, by ticker and overall.
+const computeAssignmentRate = (allCalls) => {
+  const byTicker = {};
+  let assigned = 0, closed = 0;
+  for (const c of allCalls) {
+    if (c.status === 'open') continue;
+    const t = c.ticker.toUpperCase();
+    if (!byTicker[t]) byTicker[t] = { assigned: 0, closed: 0 };
+    byTicker[t].closed++;
+    closed++;
+    if (c.status === 'assigned') { byTicker[t].assigned++; assigned++; }
+  }
+  return {
+    byTicker,
+    overall: { assigned, closed, rate: closed ? assigned / closed : 0 },
+  };
+};
 const callsForPosition = (position, allPositions, allCalls) => {
   const map = buildTickerAttribution(position.ticker, allPositions, allCalls);
   return allCalls.filter(c => {
