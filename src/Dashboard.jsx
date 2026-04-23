@@ -30,31 +30,68 @@ const GLOSSARY = {
   range52w: "The stock's 52-week price range expressed as a percentage of current price. A wider range indicates higher historical volatility. Stocks with 50%+ range tend to have richer option premiums.",
 };
  
+// Build FIFO attribution map: for each ticker, walk calls in chronological order
+// and consume shares from oldest open lot first. Each call attributes to exactly
+// the lot(s) that actually backed it, not every lot that existed at the time.
+// Only 'assigned' calls decrement lot balances (shares actually leave the account).
+const buildTickerAttribution = (ticker, allPositions, allCalls) => {
+  const t = ticker.toUpperCase();
+  const positions = allPositions
+    .filter(p => p.ticker.toUpperCase() === t)
+    .sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
+  const calls = allCalls
+    .filter(c => c.ticker.toUpperCase() === t)
+    .slice()
+    .sort((a, b) => (a.dateOpened || "").localeCompare(b.dateOpened || ""));
+
+  const balances = new Map(positions.map(p => [p.id, p.shares]));
+  const callToLots = new Map();
+
+  for (const call of calls) {
+    const callDate = call.dateOpened || "";
+    let needed = (call.contracts || 0) * 100;
+    const attributed = [];
+    for (const p of positions) {
+      if ((p.dateAcquired || "") > callDate) break;
+      const bal = balances.get(p.id);
+      if (bal <= 0) continue;
+      const take = Math.min(bal, needed);
+      if (take > 0) {
+        attributed.push({ posId: p.id, shares: take });
+        if (call.status === 'assigned') {
+          balances.set(p.id, bal - take);
+        }
+        needed -= take;
+      }
+      if (needed <= 0) break;
+    }
+    callToLots.set(call.id, attributed);
+  }
+  return callToLots;
+};
+
 const callsForPosition = (position, allPositions, allCalls) => {
-  const t = position.ticker.toUpperCase();
-  const tickerPositions = allPositions.filter(p => p.ticker.toUpperCase() === t).sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
-  const tickerCalls = allCalls.filter(c => c.ticker.toUpperCase() === t);
-  return tickerCalls.filter(c => {
-    const callDate = c.dateOpened || "";
-    const activeAtTime = tickerPositions.filter(tp => (tp.dateAcquired || "") <= callDate);
-    if (activeAtTime.length === 0) return tickerPositions[0]?.id === position.id;
-    if (activeAtTime.length === 1) return activeAtTime[0].id === position.id;
-    return activeAtTime.some(tp => tp.id === position.id);
+  const map = buildTickerAttribution(position.ticker, allPositions, allCalls);
+  return allCalls.filter(c => {
+    const attr = map.get(c.id);
+    return attr && attr.some(a => a.posId === position.id);
   });
 };
- 
+
 const weightedPremium = (position, allPositions, allCalls) => {
-  const t = position.ticker.toUpperCase();
-  const tickerPositions = allPositions.filter(p => p.ticker.toUpperCase() === t).sort((a, b) => (a.dateAcquired || "").localeCompare(b.dateAcquired || "") || a.id - b.id);
-  const tickerCalls = allCalls.filter(c => c.ticker.toUpperCase() === t);
+  const map = buildTickerAttribution(position.ticker, allPositions, allCalls);
   let total = 0;
-  tickerCalls.filter(c => c.status !== "open").forEach(c => {
-    const callDate = c.dateOpened || "";
-    const activeAtTime = tickerPositions.filter(tp => (tp.dateAcquired || "") <= callDate);
-    if (activeAtTime.length === 0) { if (tickerPositions[0]?.id === position.id) total += netPrem(c); }
-    else if (activeAtTime.length === 1) { if (activeAtTime[0].id === position.id) total += netPrem(c); }
-    else { const totalShares = activeAtTime.reduce((s, tp) => s + tp.shares, 0); if (totalShares > 0 && activeAtTime.some(tp => tp.id === position.id)) total += netPrem(c) * (position.shares / totalShares); }
-  });
+  for (const call of allCalls) {
+    if (call.ticker.toUpperCase() !== position.ticker.toUpperCase()) continue;
+    if (call.status === 'open') continue;
+    const attr = map.get(call.id);
+    if (!attr) continue;
+    const totalAttr = attr.reduce((s, a) => s + a.shares, 0);
+    const myAttr = attr.find(a => a.posId === position.id);
+    if (myAttr && totalAttr > 0) {
+      total += netPrem(call) * (myAttr.shares / totalAttr);
+    }
+  }
   return total;
 };
  
@@ -275,12 +312,13 @@ export default function CoveredCallDashboard() {
   const addEvent = (event) => { const id = data.nextId; save({ ...data, events: [...data.events, { ...event, id }], nextId: id + 1 }); };
   const removeEvent = (id) => save({ ...data, events: data.events.filter((e) => e.id !== id) });
  
-  const activePositions = data.positions;
+ const activePositions = data.positions.filter(p => !p.removed);
+ const allPositionsEver = data.positions;
   const openCalls = data.calls.filter((c) => c.status === "open");
   const closedCalls = data.calls.filter((c) => c.status !== "open");
   const totalPremiumCollected = data.calls.reduce((sum, c) => { const prem = grossPrem(c); if (c.status === "closed") return sum + prem - closeCostOf(c); if (c.status === "open") return sum; return sum + prem; }, 0);
-  const totalCapitalEverDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
-  const totalCapitalDeployed = activePositions.reduce((sum, p) => { const pCalls = callsForPosition(p, activePositions, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); return sum + p.costBasis * (p.shares - assignedShares); }, 0);
+  const totalCapitalEverDeployed = allPositionsEver.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
+const totalCapitalDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
   const activeCalls = openCalls.length;
   const upcomingEvents = data.events.filter((e) => new Date(e.date) >= new Date(today())).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 8);
  
