@@ -405,7 +405,10 @@ export default function CoveredCallDashboard() {
   const closedCalls = data.calls.filter((c) => c.status !== "open");
   const totalPremiumCollected = data.calls.reduce((sum, c) => { const prem = grossPrem(c); if (c.status === "closed") return sum + prem - closeCostOf(c); if (c.status === "open") return sum; return sum + prem; }, 0);
   const totalCapitalEverDeployed = allPositionsEver.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
-const totalCapitalDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
+  const totalCapitalDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
+  const realizedStockPnL = computeRealizedStockPnL(allPositionsEver, data.calls);
+  const realizedPnLTotal = totalPremiumCollected + realizedStockPnL.totalRealized;
+  const assignmentRate = computeAssignmentRate(data.calls);
   const activeCalls = openCalls.length;
   const upcomingEvents = data.events.filter((e) => new Date(e.date) >= new Date(today())).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 8);
  
