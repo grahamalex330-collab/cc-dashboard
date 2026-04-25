@@ -299,10 +299,7 @@ export default function CoveredCallDashboard() {
   const [syncStatus, setSyncStatus] = useState(null);
   const [showImport, setShowImport] = useState(false);
  
-  const fetchLivePrices = useCallback(async () => {
-    const callTickers = data.calls.filter(c => c.status === "open").map(c => c.ticker);
-    const posTickers = data.positions.filter(p => !p.removed).map(p => p.ticker);
-    const tickers = [...new Set([...callTickers, ...posTickers])].map(t => t.toUpperCase());
+const posTickers = data.positions.map(p => p.ticker);
     if (tickers.length === 0) return;
     setPricesLoading(true);
     try {
