@@ -342,7 +342,33 @@ const posTickers = data.positions.map(p => p.ticker);
   const handleLeave = () => { localStorage.removeItem("cc_household_code"); setHouseholdCode(""); setJoined(false); setData(EMPTY_STATE); setCodeInput(""); setLoading(true); };
  
   useEffect(() => { (async () => { try { const raw = localStorage.getItem("cc_scanner_cache"); if (raw) { const cached = JSON.parse(raw); if (cached.timestamp?.slice(0, 10) === today()) { setScannerData(cached.stocks); setScannerTimestamp(cached.timestamp); } } } catch {} })(); }, []);
- 
+ const fetchLivePrices = useCallback(async () => {
+    const callTickers = data.calls.filter(c => c.status === "open").map(c => c.ticker);
+    const posTickers = data.positions.map(p => p.ticker);
+    const tickers = [...new Set([...callTickers, ...posTickers])].map(t => t.toUpperCase());
+    if (tickers.length === 0) return;
+    setPricesLoading(true);
+    try {
+      const resp = await fetch(`/api/prices?tickers=${tickers.join(",")}`);
+      const json = await resp.json();
+      if (json.prices) {
+        const prices = {};
+        const meta = {};
+        Object.entries(json.prices).forEach(([ticker, p]) => {
+          if (p && typeof p.price === "number") {
+            prices[ticker] = p.price;
+            meta[ticker] = { change: p.change, changePct: p.changePct, stale: p.stale, fetchedAt: p.fetchedAt };
+          }
+        });
+        setLivePrices(prices);
+        setPriceMeta(meta);
+        setPricesTimestamp(new Date().toISOString());
+        setMarketStatus(json.marketStatus || null);
+        setPricesStale(!!json.anyStale);
+      }
+    } catch (err) { console.error("Price fetch error:", err); }
+    setPricesLoading(false);
+  }, [data.calls, data.positions]);
   useEffect(() => {
     // Auto-fetch prices on Dashboard or Positions tab when user has active positions.
     // Respects 5-min cache to avoid re-fetching on every tab switch.
