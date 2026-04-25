@@ -58,7 +58,25 @@ function isMarketOpen(now = new Date()) {
   const minutes = parseInt(hStr, 10) * 60 + parseInt(mStr, 10);
   return minutes >= 570 && minutes < 960; // 9:30am (570) to 4:00pm (960)
 }
-
+// Yahoo Finance fallback. Used when FMP returns no data (e.g., recent spinoffs like GEV).
+// Uses the v8/chart endpoint which is publicly accessible without auth/crumb.
+async function fetchFromYahoo(ticker) {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=2d`;
+    const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; cc-dashboard/1.0)' } });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const meta = data?.chart?.result?.[0]?.meta;
+    if (!meta || typeof meta.regularMarketPrice !== 'number') return null;
+    const price = meta.regularMarketPrice;
+    const prevClose = typeof meta.chartPreviousClose === 'number' ? meta.chartPreviousClose : meta.previousClose;
+    const change = typeof prevClose === 'number' ? price - prevClose : 0;
+    const changePct = typeof prevClose === 'number' && prevClose !== 0 ? (change / prevClose) * 100 : 0;
+    return { price, change, changePct };
+  } catch (e) {
+    return null;
+  }
+}
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -141,6 +159,20 @@ export default async function handler(req, res) {
         fmpFailed = true; // at least one call failed — surface to frontend
       }
     });
+
+    // Yahoo Finance fallback for any tickers FMP couldn't return
+    const yahooFailures = stale.filter(t => !fmpResults[t]);
+    if (yahooFailures.length > 0) {
+      const yahooCalls = await Promise.all(yahooFailures.map(async (ticker) => ({
+        ticker,
+        result: await fetchFromYahoo(ticker)
+      })));
+      yahooCalls.forEach(({ ticker, result }) => {
+        if (result) {
+          fmpResults[ticker] = result;
+        }
+      });
+    }
   }
 
   // 4. Upsert fresh FMP results into cache
