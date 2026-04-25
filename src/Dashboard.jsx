@@ -1823,11 +1823,11 @@ return {
         <p className="font-semibold mb-1">Premium income only — stock disposals not included</p>
         <p className="text-amber-800">
           This view shows option premium income from CC trades. It does <strong>not</strong> include capital gains or losses from shares sold via assignment (estimated at <strong>−$72,153</strong> realized stock losses across HOOD and PLTR). Net taxable picture from this strategy is roughly <strong>−$20,861</strong>, not the +$51,292 shown above. Consult your CPA before filing.
-        </p>
+
+         </p>
       </div>
     </div>
-    <div className="flex items-center justify-between">
-      <h2 className="text-lg font-semibold text-gray-900">Tax Treatment</h2>
+    <h2 className="text-lg font-semibold text-gray-900">Tax Treatment</h2>
             <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
               <StatCard icon={Clock} label="Short-Term Gains" value={formatCurrency(taxData.filter(t => t.treatment === "Short-term" && t.net > 0).reduce((s, t) => s + t.net, 0))} color="text-orange-700" />
               <StatCard icon={Shield} label="Long-Term Gains" value={formatCurrency(taxData.filter(t => t.treatment === "Long-term" && t.net > 0).reduce((s, t) => s + t.net, 0))} color="text-green-700" />
