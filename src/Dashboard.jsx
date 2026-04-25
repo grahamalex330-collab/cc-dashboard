@@ -299,30 +299,6 @@ export default function CoveredCallDashboard() {
   const [syncStatus, setSyncStatus] = useState(null);
   const [showImport, setShowImport] = useState(false);
  
-const posTickers = data.positions.map(p => p.ticker);
-    if (tickers.length === 0) return;
-    setPricesLoading(true);
-    try {
-      const resp = await fetch(`/api/prices?tickers=${tickers.join(",")}`);
-      const json = await resp.json();
-      if (json.prices) {
-        const prices = {};
-        const meta = {};
-        Object.entries(json.prices).forEach(([ticker, p]) => {
-          if (p && typeof p.price === "number") {
-            prices[ticker] = p.price;
-            meta[ticker] = { change: p.change, changePct: p.changePct, stale: p.stale, fetchedAt: p.fetchedAt };
-          }
-        });
-        setLivePrices(prices);
-        setPriceMeta(meta);
-        setPricesTimestamp(new Date().toISOString());
-        setMarketStatus(json.marketStatus || null);
-        setPricesStale(!!json.anyStale);
-      }
-    } catch (err) { console.error("Price fetch error:", err); }
-    setPricesLoading(false);
-  }, [data.calls, data.positions]);
  
   useEffect(() => {
     if (!joined || !householdCode) return;
