@@ -1536,6 +1536,61 @@ return {
                   </tbody>
                 </table>
               </div>
+           </Card>
+
+            {/* P&L by Ticker (premium + realized stock + unrealized + pending) */}
+            <Card className="p-5">
+              <h3 className="font-semibold text-gray-900 mb-1">P&L by Ticker</h3>
+              <p className="text-xs text-gray-500 mb-4">Realized + unrealized P&L per ticker, including premium income</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-gray-500 border-b border-gray-200">
+                      <th className="text-left py-2">TICKER</th>
+                      <th className="text-right py-2">PREMIUM (CLOSED)</th>
+                      <th className="text-right py-2">STOCK P&L (REALIZED)</th>
+                      <th className="text-right py-2">UNREALIZED P&L</th>
+                      <th className="text-right py-2">PENDING PREMIUM</th>
+                      <th className="text-right py-2 font-semibold">NET</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...new Set(allPositionsEver.map(p => p.ticker.toUpperCase()))].map(t => {
+                      const tClosed = closedCalls.filter(c => c.ticker.toUpperCase() === t);
+                      const tPrem = tClosed.reduce((s, c) => s + netPrem(c), 0);
+                      const tStock = realizedStockPnL.byTicker[t]?.realized || 0;
+                      const tPending = computePendingPremium(data.calls).byTicker[t] || 0;
+                      const tActive = activePositions.filter(p => p.ticker.toUpperCase() === t);
+                      const tActiveShares = tActive.reduce((s, p) => s + p.shares, 0);
+                      const tActiveCost = tActive.reduce((s, p) => s + p.costBasis * p.shares, 0);
+                      const tMktPrice = livePrices[t];
+                      const tUnrealized = (tMktPrice && tActiveShares > 0) ? (tMktPrice * tActiveShares - tActiveCost) : null;
+                      const tNet = tPrem + tStock + (tUnrealized || 0);
+                      const soldUnknown = realizedStockPnL.byTicker[t]?.soldSharesUnknownPrice || 0;
+                      return (
+                        <tr key={t} className="border-b border-gray-100">
+                          <td className="py-2 font-semibold">
+                            {t}
+                            {soldUnknown > 0 && (
+                              <span className="text-xs text-amber-600 ml-1" title={`${soldUnknown} shares sold outside assignment — stock P&L excludes these`}>⚠</span>
+                            )}
+                          </td>
+                          <td className="text-right">{formatCurrency(tPrem)}</td>
+                          <td className={`text-right ${tStock >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(tStock)}</td>
+                          <td className={`text-right ${tUnrealized === null ? 'text-gray-400' : tUnrealized >= 0 ? 'text-green-700' : 'text-red-700'}`}>{tUnrealized !== null ? formatCurrency(tUnrealized) : '—'}</td>
+                          <td className="text-right text-gray-500">{tPending > 0 ? formatCurrency(tPending) : '—'}</td>
+                          <td className={`text-right font-semibold ${tNet >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(tNet)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {realizedStockPnL.totalSoldUnknown > 0 && (
+                <p className="text-xs text-amber-600 mt-3">
+                  ⚠ {realizedStockPnL.totalSoldUnknown} shares were sold outside assignments. Stock P&L on those disposals isn't captured (sale price not stored on the lot).
+                </p>
+              )}
             </Card>
 
             {/* CC Yield vs Buy & Hold Comparison */}
