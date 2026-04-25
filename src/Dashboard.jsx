@@ -1443,7 +1443,7 @@ return {
         )}
         {tab === "Analytics" && (
           <div className="space-y-6">
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <StatCard icon={DollarSign} label="Total Premium" value={formatCurrency(totalPremiumCollected)} color="text-green-700" />
               <StatCard icon={TrendingUp} label="Annualized Yield" value={formatPct(annualizedYield)} color="text-green-700" />
               <StatCard icon={BarChart3} label="Total Trades" value={data.calls.length} />
@@ -1455,8 +1455,8 @@ return {
       }).length / closedCalls.length) * 100).toFixed(0)}%`
     : "—"
 } sub="Net-positive cycles" />
+              <StatCard icon={Shield} label="Assignment Rate" value={`${(assignmentRate.overall.rate * 100).toFixed(0)}%`} sub={`${assignmentRate.overall.assigned} of ${assignmentRate.overall.closed} closed`} color={assignmentRate.overall.rate > 0.4 ? "text-amber-600" : "text-gray-700"} />
             </div>
-
             {/* Weekly Chart */}
             <Card className="p-5">
               <h3 className="font-semibold text-gray-900 mb-4">Weekly Premium (Bar) + Cumulative (Line)</h3>
