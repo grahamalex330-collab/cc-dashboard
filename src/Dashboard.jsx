@@ -18,8 +18,11 @@ const GLOSSARY = {
   assignment: "When the option buyer exercises their right to buy your shares at the strike price. This happens when the call is ITM at expiration (or sometimes early).",
   rollForward: "Closing your current call (buying to close) and simultaneously opening a new one at a later expiration and/or different strike. Used to avoid assignment or collect more premium.",
   washSale: "An IRS rule: if you sell a security at a loss and buy a 'substantially identical' security within 30 days before or after, the loss is disallowed for tax purposes.",
-  annualizedYield: "Your premium income projected over a full year. Calculated as: (premium collected / capital deployed) \u00d7 (365 / days active). Helps compare returns across different holding periods.",
-  contracts: "Each options contract represents 100 shares. So 1 contract on a $50 stock covers $5,000 worth of shares.",
+  annualizedYield: "Premium income annualized over capital ever deployed. Calculated as: (premium collected / capital ever deployed) × (365 / days active). Income-rate metric only — does not subtract stock losses on assignments. Compare with Realized P&L for a fuller picture.",
+  totalPremium: "Net premium income from all closed covered calls (gross premium minus any buy-to-close costs). Excludes premium on currently open calls until they resolve.",
+  realizedPnL: "Total realized return on the strategy: premium income plus stock gains/losses on shares assigned via covered call. Does not include unrealized P&L on currently held positions.",
+  activeCalls: "Number of covered calls currently open (not yet expired or assigned). Each contract covers 100 shares.",
+  capitalDeployed: "Cost basis of all currently active stock positions. Does not include cash, removed lots, or non-CC holdings.",
   breakeven: "The stock price at which you neither make nor lose money on the combined position (shares + call). Equals your cost basis minus premium received.",
   assignmentRisk: "How likely your call is to be assigned. Based on how close the stock price is to your strike. ITM = very high risk. Within 2% = high. 2-5% = moderate. 5%+ = low.",
   capitalUtilization: "What percentage of your stock positions currently have calls written against them. Higher = more income generation. 100% means every position is covered.",
@@ -747,11 +750,11 @@ return {
             )}
 
          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-              <StatCard icon={DollarSign} label="Total Premium" value={formatCurrency(totalPremiumCollected)} sub="Net collected" color="text-green-700" />
-              <StatCard icon={DollarSign} label="Realized P&L" value={formatCurrency(realizedPnLTotal)} sub="Stock + premium" color={realizedPnLTotal >= 0 ? "text-green-700" : "text-red-700"} />
-              <StatCard icon={Target} label="Active Calls" value={activeCalls} sub={`${activePositions.length} positions`} />
+              <StatCard icon={DollarSign} label={<Tip term="totalPremium">Total Premium</Tip>} value={formatCurrency(totalPremiumCollected)} sub="Net collected" color="text-green-700" />
+              <StatCard icon={DollarSign} label={<Tip term="realizedPnL">Realized P&L</Tip>} value={formatCurrency(realizedPnLTotal)} sub="Stock + premium" color={realizedPnLTotal >= 0 ? "text-green-700" : "text-red-700"} />
+              <StatCard icon={Target} label={<Tip term="activeCalls">Active Calls</Tip>} value={activeCalls} sub={`${activePositions.length} positions`} />
               <StatCard icon={TrendingUp} label={<Tip term="annualizedYield">Annualized Yield</Tip>} value={formatPct(annualizedYield)} sub="On deployed capital" color={annualizedYield > 0 ? "text-green-700" : "text-gray-900"} />
-              <StatCard icon={DollarSign} label="Capital Deployed" value={formatCurrency(totalCapitalDeployed)} />
+              <StatCard icon={DollarSign} label={<Tip term="capitalDeployed">Capital Deployed</Tip>} value={formatCurrency(totalCapitalDeployed)} />
             </div>
 
             <div className="grid lg:grid-cols-3 gap-6">
