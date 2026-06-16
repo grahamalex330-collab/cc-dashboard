@@ -82,6 +82,7 @@ const buildTickerAttribution = (ticker, allPositions, allCalls) => {
 // Lots sold outside assignments (no closePrice stored) are flagged as soldSharesUnknownPrice.
 const computeRealizedStockPnL = (allPositions, allCalls) => {
   const byTicker = {};
+  const realizedEvents = [];
   const tickers = [...new Set(allPositions.map(p => p.ticker.toUpperCase()))];
   for (const t of tickers) {
     const posns = allPositions.filter(p => p.ticker.toUpperCase() === t);
@@ -92,10 +93,13 @@ const computeRealizedStockPnL = (allPositions, allCalls) => {
     for (const call of allCalls) {
       if (call.ticker.toUpperCase() !== t || call.status !== 'assigned') continue;
       const attr = map.get(call.id) || [];
+      let callRealized = 0;
       for (const a of attr) {
-        realized += (call.strike - (lotBasis.get(a.posId) || 0)) * a.shares;
+        callRealized += (call.strike - (lotBasis.get(a.posId) || 0)) * a.shares;
         lotConsumedShares.set(a.posId, (lotConsumedShares.get(a.posId) || 0) + a.shares);
       }
+      realized += callRealized;
+      realizedEvents.push({ date: call.dateClosed || call.expiration || call.expiry || '', ticker: t, amount: callRealized });
     }
     const soldSharesUnknownPrice = posns
       .filter(p => p.removed)
@@ -104,7 +108,7 @@ const computeRealizedStockPnL = (allPositions, allCalls) => {
   }
   const totalRealized = Object.values(byTicker).reduce((s, v) => s + v.realized, 0);
   const totalSoldUnknown = Object.values(byTicker).reduce((s, v) => s + v.soldSharesUnknownPrice, 0);
-  return { byTicker, totalRealized, totalSoldUnknown };
+  return { byTicker, totalRealized, totalSoldUnknown, realizedEvents };
 };
 
 // Per-call cycle P&L. Used for Win Rate.
@@ -280,6 +284,7 @@ export default function CoveredCallDashboard() {
   const [tab, setTab] = useState("Dashboard");
   const [premChartView, setPremChartView] = useState("monthly");
   const [premChartRange, setPremChartRange] = useState("all");
+  const [totalReturnRange, setTotalReturnRange] = useState("all");
   const [loading, setLoading] = useState(true);
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [showWriteCall, setShowWriteCall] = useState(false);
@@ -424,6 +429,14 @@ export default function CoveredCallDashboard() {
   const taxData = useMemo(() => data.calls.filter(c => c.status !== "open").map((c) => { const held = daysBetween(c.dateOpened, c.dateClosed || today()); const net = netPrem(c); const treatment = held > 365 ? "Long-term" : "Short-term"; const isLoss = net < 0; const nearbyTrades = data.calls.filter((o) => o.id !== c.id && o.ticker === c.ticker && Math.abs(daysBetween(c.dateClosed || today(), o.dateOpened)) <= 30); return { ...c, held, net, treatment, washSaleRisk: isLoss && nearbyTrades.length > 0 }; }), [data.calls]);
   const annualizedYield = useMemo(() => { if (totalCapitalEverDeployed === 0) return 0; const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return 0; const daysSinceFirst = daysBetween(allDates[0], today()); if (daysSinceFirst <= 0) return 0; return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst); }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
   const allInReturn = useMemo(() => { const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return { pctNow: 0, pctEver: 0 }; const days = daysBetween(allDates[0], today()); if (days <= 0) return { pctNow: 0, pctEver: 0 }; const pctNow = totalCapitalDeployed > 0 ? (realizedPnLTotal / totalCapitalDeployed) * (365 / days) : 0; const pctEver = totalCapitalEverDeployed > 0 ? (realizedPnLTotal / totalCapitalEverDeployed) * (365 / days) : 0; return { pctNow, pctEver }; }, [realizedPnLTotal, totalCapitalDeployed, totalCapitalEverDeployed, data.calls]);
+  const totalReturnPeriod = useMemo(() => {
+    const monthsBack = { all: null, "6m": 6, "3m": 3, "1m": 1 }[totalReturnRange];
+    let cutoff = "0000-00-00";
+    if (monthsBack) { const cd = parseLocalDate(today()); cd.setMonth(cd.getMonth() - monthsBack); cutoff = `${cd.getFullYear()}-${String(cd.getMonth() + 1).padStart(2, "0")}-${String(cd.getDate()).padStart(2, "0")}`; }
+    const premium = data.calls.filter(c => c.status !== "open" && (c.dateClosed || c.dateOpened || "") >= cutoff).reduce((s, c) => s + netPrem(c), 0);
+    const stock = (realizedStockPnL.realizedEvents || []).filter(e => (e.date || "") >= cutoff).reduce((s, e) => s + e.amount, 0);
+    return { premium, stock, realized: premium + stock };
+  }, [totalReturnRange, data.calls, realizedStockPnL]);
   const weeklyPL = useMemo(() => { const now = new Date(); const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`; const thisWeekCalls = data.calls.filter(c => { if (c.status === "open") return false; return (c.dateClosed || c.dateOpened) >= startKey; }); return { premium: thisWeekCalls.reduce((sum, c) => sum + netPrem(c), 0), trades: thisWeekCalls.length, callsWritten: data.calls.filter(c => (c.dateOpened || "") >= startKey).length }; }, [data.calls]);
   const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const pCalls = callsForPosition(p, allPositionsEver, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => { const openSh = data.calls.filter(c => c.status === "open" && c.ticker.toUpperCase() === t).reduce((s, c) => s + (c.contracts || 0) * 100, 0); const heldSh = grouped[t]?.currentShares || 0; return heldSh > 0 && openSh >= heldSh; }).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio \u2014 heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of CC-strategy capital \u2014 consider diversifying (excludes cash and non-CC holdings).` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
 
@@ -1485,22 +1498,41 @@ return {
         {tab === "Analytics" && (
           <div className="space-y-6">
             <Card className="p-5">
-              <div className="flex items-baseline justify-between mb-4 flex-wrap gap-1">
-                <h3 className="font-semibold text-gray-900">Total Return</h3>
-                <span className="text-xs text-gray-400">Premium + realized stock + unrealized — components shown, never blended into one rate</span>
+              <div className="flex items-baseline justify-between mb-4 flex-wrap gap-2">
+                <div>
+                  <h3 className="font-semibold text-gray-900">Total Return</h3>
+                  <span className="text-xs text-gray-400">Realized windows by period; unrealized is always a current snapshot</span>
+                </div>
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+                  {[["all", "All"], ["6m", "6M"], ["3m", "3M"], ["1m", "1M"]].map(([v, lbl]) => (
+                    <button key={v} onClick={() => setTotalReturnRange(v)} className={`text-xs px-2.5 py-1 rounded-md ${totalReturnRange === v ? "bg-white shadow-sm font-medium text-gray-900" : "text-gray-500"}`}>{lbl}</button>
+                  ))}
+                </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <div className="flex justify-between text-sm"><span className="text-gray-600">Premium income</span><span className="font-medium text-green-700">{formatCurrency(totalPremiumCollected)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-gray-600">Realized stock P&L (assignments)</span><span className={`font-medium ${realizedStockPnL.totalRealized >= 0 ? "text-green-700" : "text-red-700"}`}>{formatCurrency(realizedStockPnL.totalRealized)}</span></div>
-                  <div className="flex justify-between text-sm border-t border-gray-200 pt-2 font-semibold"><span>Realized total (banked)</span><span className={realizedPnLTotal >= 0 ? "text-green-700" : "text-red-700"}>{formatCurrency(realizedPnLTotal)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-gray-600">Unrealized (paper, current holdings)</span><span className={`font-medium ${totalUnrealized >= 0 ? "text-green-700" : "text-red-700"}`}>{formatCurrency(totalUnrealized)}</span></div>
-                  <div className="flex justify-between text-sm border-t border-gray-200 pt-2 font-bold"><span>Total incl. unrealized</span><span className={(realizedPnLTotal + totalUnrealized) >= 0 ? "text-green-700" : "text-red-700"}>{formatCurrency(realizedPnLTotal + totalUnrealized)}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-gray-600">Premium income{totalReturnRange !== "all" ? " (period)" : ""}</span><span className="font-medium text-green-700">{formatCurrency(totalReturnPeriod.premium)}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-gray-600">Realized stock P&L (assignments)</span><span className={`font-medium ${totalReturnPeriod.stock >= 0 ? "text-green-700" : "text-red-700"}`}>{formatCurrency(totalReturnPeriod.stock)}</span></div>
+                  <div className="flex justify-between text-sm border-t border-gray-200 pt-2 font-semibold"><span>Realized total{totalReturnRange !== "all" ? ` (last ${totalReturnRange.toUpperCase()})` : " (banked)"}</span><span className={totalReturnPeriod.realized >= 0 ? "text-green-700" : "text-red-700"}>{formatCurrency(totalReturnPeriod.realized)}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-gray-600">Unrealized (paper){totalReturnRange !== "all" ? <span className="text-gray-400"> · current, all-time</span> : " — current holdings"}</span><span className={`font-medium ${totalUnrealized >= 0 ? "text-green-700" : "text-red-700"}`}>{formatCurrency(totalUnrealized)}</span></div>
+                  {totalReturnRange === "all" && (
+                    <div className="flex justify-between text-sm border-t border-gray-200 pt-2 font-bold"><span>Total incl. unrealized</span><span className={(totalReturnPeriod.realized + totalUnrealized) >= 0 ? "text-green-700" : "text-red-700"}>{formatCurrency(totalReturnPeriod.realized + totalUnrealized)}</span></div>
+                  )}
                 </div>
                 <div className="space-y-1.5 md:border-l md:border-gray-100 md:pl-6">
-                  <p className="text-xs text-gray-500 uppercase tracking-wide">All-in realized return (annualized)</p>
-                  <div className="flex items-baseline gap-2"><span className={`text-3xl font-bold ${allInReturn.pctNow >= 0 ? "text-green-700" : "text-red-700"}`}>{formatPct(allInReturn.pctNow)}</span><span className="text-xs text-gray-400">on current capital ({formatCurrency(totalCapitalDeployed)})</span></div>
-                  <div className="flex items-baseline gap-2"><span className={`text-lg font-semibold ${allInReturn.pctEver >= 0 ? "text-green-700" : "text-red-700"}`}>{formatPct(allInReturn.pctEver)}</span><span className="text-xs text-gray-400">on all capital ever deployed ({formatCurrency(totalCapitalEverDeployed)})</span></div>
+                  {totalReturnRange === "all" ? (
+                    <>
+                      <p className="text-xs text-gray-500 uppercase tracking-wide">All-in realized return (annualized)</p>
+                      <div className="flex items-baseline gap-2"><span className={`text-3xl font-bold ${allInReturn.pctNow >= 0 ? "text-green-700" : "text-red-700"}`}>{formatPct(allInReturn.pctNow)}</span><span className="text-xs text-gray-400">on current capital ({formatCurrency(totalCapitalDeployed)})</span></div>
+                      <div className="flex items-baseline gap-2"><span className={`text-lg font-semibold ${allInReturn.pctEver >= 0 ? "text-green-700" : "text-red-700"}`}>{formatPct(allInReturn.pctEver)}</span><span className="text-xs text-gray-400">on all capital ever deployed ({formatCurrency(totalCapitalEverDeployed)})</span></div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-gray-500 uppercase tracking-wide">Realized in last {totalReturnRange.toUpperCase()}</p>
+                      <div className="flex items-baseline gap-2"><span className={`text-3xl font-bold ${totalReturnPeriod.realized >= 0 ? "text-green-700" : "text-red-700"}`}>{formatCurrency(totalReturnPeriod.realized)}</span></div>
+                      <div className="flex items-baseline gap-2"><span className={`text-lg font-semibold ${totalReturnPeriod.realized >= 0 ? "text-green-700" : "text-red-700"}`}>{totalCapitalDeployed > 0 ? formatPct(totalReturnPeriod.realized / totalCapitalDeployed) : "—"}</span><span className="text-xs text-gray-400">of current capital this period (not annualized)</span></div>
+                    </>
+                  )}
                   <p className="text-xs text-amber-600 pt-1">Realized only — excludes unrealized paper{realizedStockPnL.totalSoldUnknown > 0 ? ` and ${realizedStockPnL.totalSoldUnknown.toLocaleString()} orphan-disposal shares (sale price not recorded), so it understates actual results` : ""}.</p>
                 </div>
               </div>
