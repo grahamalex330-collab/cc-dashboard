@@ -396,6 +396,7 @@ export default function CoveredCallDashboard() {
   const addPastCall = (call) => { const id = data.nextId; save({ ...data, calls: [...data.calls, { ...call, id }], nextId: id + 1 }); };
   const updateCall = (id, updates) => save({ ...data, calls: data.calls.map(c => c.id === id ? { ...c, ...updates } : c) });
   const closeCall = (id, action, closePrice = 0) => save({ ...data, calls: data.calls.map((c) => c.id === id ? { ...c, status: action, dateClosed: today(), closePrice: parseFloat(closePrice) || 0 } : c) });
+  const deleteCall = (id) => save({ ...data, calls: data.calls.filter((c) => c.id !== id) });
   const addWatchlistItem = (item) => { const id = data.nextId; save({ ...data, watchlist: [...data.watchlist, { ...item, id }], nextId: id + 1 }); };
   const removeWatchlistItem = (id) => save({ ...data, watchlist: data.watchlist.filter((w) => w.id !== id) });
   const addEvent = (event) => { const id = data.nextId; save({ ...data, events: [...data.events, { ...event, id }], nextId: id + 1 }); };
@@ -741,7 +742,7 @@ return {
                             <span className="text-sm font-medium">{priceDisplay}</span>
                             {s.changePct != null && (
                               <span className={`text-xs ${changeColor}`}>
-                                {s.changePct >= 0 ? "+" : ""}{s.changePct.toFixed(2)}%
+                                {s.changePct >= 0 ? "+" : ""}{s.changePct.toFixed(2)}% <span className="text-gray-400 font-normal">1d</span>
                               </span>
                             )}
                           </div>
@@ -1041,6 +1042,13 @@ return {
                                   <Edit2 size={13} />
                                 </button>
                                 <Btn variant="secondary" size="sm" onClick={() => setShowCloseCall(c)}>Close</Btn>
+                                <button
+                                  className="p-1.5 rounded-md hover:bg-red-100 text-gray-400 hover:text-red-600 transition-colors"
+                                  onClick={() => { if (window.confirm(`Delete this ${c.ticker} $${c.strike} call (${c.contracts} contract${c.contracts === 1 ? "" : "s"}, exp ${c.expiration})? This permanently removes the trade and cannot be undone.`)) deleteCall(c.id); }}
+                                  title="Delete trade"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -1133,7 +1141,7 @@ return {
                                   <span className="font-medium">{formatCurrency(curPrice)}</span>
                                   {priceMeta[t] && typeof priceMeta[t].changePct === "number" && (
                                     <span className={`ml-1 text-xs ${priceMeta[t].changePct >= 0 ? "text-green-600" : "text-red-600"}`}>
-                                      {priceMeta[t].changePct >= 0 ? "+" : ""}{priceMeta[t].changePct.toFixed(2)}%
+                                      {priceMeta[t].changePct >= 0 ? "+" : ""}{priceMeta[t].changePct.toFixed(2)}% <span className="text-gray-400">1d</span>
                                     </span>
                                   )}
                                 </div>
@@ -1305,7 +1313,7 @@ return {
               </div>
               {data.watchlist.some(w => w.volScore > 0) && (
                 <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 rounded-b-xl">
-                  <p className="text-xs text-gray-400">Vol Score (0-100) based on: 52w range, beta, 30d momentum, volume activity, and earnings proximity</p>
+                  <p className="text-xs text-gray-400">Vol Score (0-100) based on: 52w range, beta, 30d momentum, volume activity, and earnings proximity{(() => { const ds = data.watchlist.map(w => w.dateScored).filter(Boolean).sort(); return ds.length ? ` · Prices & scores as of ${ds[ds.length - 1]} (snapshot, not live)` : ""; })()}</p>
                 </div>
               )}
             </Card>
@@ -1850,7 +1858,7 @@ return {
       <div className="text-sm text-amber-900">
         <p className="font-semibold mb-1">Premium income only — stock disposals not included</p>
         <p className="text-amber-800">
-          This view shows option premium income from CC trades. It does <strong>not</strong> include capital gains or losses from shares sold via assignment (estimated at <strong>−$72,153</strong> realized stock losses across HOOD and PLTR). Net taxable picture from this strategy is roughly <strong>−$20,861</strong>, not the +$51,292 shown above. Consult your CPA before filing.
+          This view shows option premium income from CC trades. It does <strong>not</strong> include capital gains or losses from shares sold via assignment (<strong>{formatCurrency(realizedStockPnL.totalRealized)}</strong> realized stock P&L, attributed via FIFO). Net taxable picture including that is roughly <strong>{formatCurrency(realizedPnLTotal)}</strong>, not the {formatCurrency(totalPremiumCollected)} premium-only figure shown above.{realizedStockPnL.totalSoldUnknown > 0 ? ` This still excludes ${realizedStockPnL.totalSoldUnknown.toLocaleString()} shares sold outside assignment, whose disposal price isn't stored.` : ""} Consult your CPA before filing.
 
          </p>
       </div>
