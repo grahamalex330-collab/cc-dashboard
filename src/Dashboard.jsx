@@ -279,6 +279,7 @@ export default function CoveredCallDashboard() {
   const [data, setData] = useState(EMPTY_STATE);
   const [tab, setTab] = useState("Dashboard");
   const [premChartView, setPremChartView] = useState("monthly");
+  const [premChartRange, setPremChartRange] = useState("all");
   const [loading, setLoading] = useState(true);
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [showWriteCall, setShowWriteCall] = useState(false);
@@ -418,8 +419,8 @@ export default function CoveredCallDashboard() {
   const activeCalls = openCalls.length;
   const upcomingEvents = data.events.filter((e) => new Date(e.date) >= new Date(today())).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 8);
  
-  const premiumByWeek = useMemo(() => { const weeks = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const [y, m, d] = (dateStr || "").split("-").map(Number); if (!y) return; const dt = new Date(y, m - 1, d); const weekStart = new Date(dt); weekStart.setDate(dt.getDate() - dt.getDay()); const key = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`; weeks[key] = (weeks[key] || 0) + netPrem(c); }); const sorted = Object.entries(weeks).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([week, amount]) => { cum += amount; return { week: week.slice(5), amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
-  const premiumByMonth = useMemo(() => { const months = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const key = (dateStr || "").slice(0, 7); if (!key || key.length < 7) return; months[key] = (months[key] || 0) + netPrem(c); }); const sorted = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([month, amount]) => { cum += amount; return { month, amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
+  const premiumByWeek = useMemo(() => { const weeks = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const [y, m, d] = (dateStr || "").split("-").map(Number); if (!y) return; const dt = new Date(y, m - 1, d); const weekStart = new Date(dt); weekStart.setDate(dt.getDate() - dt.getDay()); const key = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`; weeks[key] = (weeks[key] || 0) + netPrem(c); }); const sorted = Object.entries(weeks).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([week, amount]) => { cum += amount; return { week: week.slice(5), _date: week, amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
+  const premiumByMonth = useMemo(() => { const months = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const key = (dateStr || "").slice(0, 7); if (!key || key.length < 7) return; months[key] = (months[key] || 0) + netPrem(c); }); const sorted = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([month, amount]) => { cum += amount; return { month, _date: month + "-01", amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
   const taxData = useMemo(() => data.calls.filter(c => c.status !== "open").map((c) => { const held = daysBetween(c.dateOpened, c.dateClosed || today()); const net = netPrem(c); const treatment = held > 365 ? "Long-term" : "Short-term"; const isLoss = net < 0; const nearbyTrades = data.calls.filter((o) => o.id !== c.id && o.ticker === c.ticker && Math.abs(daysBetween(c.dateClosed || today(), o.dateOpened)) <= 30); return { ...c, held, net, treatment, washSaleRisk: isLoss && nearbyTrades.length > 0 }; }), [data.calls]);
   const annualizedYield = useMemo(() => { if (totalCapitalEverDeployed === 0) return 0; const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return 0; const daysSinceFirst = daysBetween(allDates[0], today()); if (daysSinceFirst <= 0) return 0; return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst); }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
   const allInReturn = useMemo(() => { const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return { pctNow: 0, pctEver: 0 }; const days = daysBetween(allDates[0], today()); if (days <= 0) return { pctNow: 0, pctEver: 0 }; const pctNow = totalCapitalDeployed > 0 ? (realizedPnLTotal / totalCapitalDeployed) * (365 / days) : 0; const pctEver = totalCapitalEverDeployed > 0 ? (realizedPnLTotal / totalCapitalEverDeployed) * (365 / days) : 0; return { pctNow, pctEver }; }, [realizedPnLTotal, totalCapitalDeployed, totalCapitalEverDeployed, data.calls]);
@@ -1522,16 +1523,27 @@ return {
             <Card className="p-5">
               <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                 <h3 className="font-semibold text-gray-900">Premium Collected (Bar) + Cumulative (Line)</h3>
-                <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
-                  {["weekly", "monthly"].map(v => (
-                    <button key={v} onClick={() => setPremChartView(v)} className={`text-xs px-3 py-1 rounded-md capitalize ${premChartView === v ? "bg-white shadow-sm font-medium text-gray-900" : "text-gray-500"}`}>{v}</button>
-                  ))}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+                    {[["all", "All"], ["6m", "6M"], ["3m", "3M"], ["1m", "1M"]].map(([v, lbl]) => (
+                      <button key={v} onClick={() => setPremChartRange(v)} className={`text-xs px-2.5 py-1 rounded-md ${premChartRange === v ? "bg-white shadow-sm font-medium text-gray-900" : "text-gray-500"}`}>{lbl}</button>
+                    ))}
+                  </div>
+                  <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+                    {["weekly", "monthly"].map(v => (
+                      <button key={v} onClick={() => setPremChartView(v)} className={`text-xs px-3 py-1 rounded-md capitalize ${premChartView === v ? "bg-white shadow-sm font-medium text-gray-900" : "text-gray-500"}`}>{v}</button>
+                    ))}
+                  </div>
                 </div>
               </div>
               {(() => {
                 const isWeekly = premChartView === "weekly";
-                const chartData = isWeekly ? premiumByWeek : premiumByMonth;
-                if (chartData.length === 0) return <div className="h-64 flex items-center justify-center text-gray-400 text-sm">Close some trades to see chart data.</div>;
+                const monthsBack = { all: null, "6m": 6, "3m": 3, "1m": 1 }[premChartRange];
+                let cutoff = "0000-00-00";
+                if (monthsBack) { const cd = parseLocalDate(today()); cd.setMonth(cd.getMonth() - monthsBack); cutoff = `${cd.getFullYear()}-${String(cd.getMonth() + 1).padStart(2, "0")}-${String(cd.getDate()).padStart(2, "0")}`; }
+                let cum = 0;
+                const chartData = (isWeekly ? premiumByWeek : premiumByMonth).filter(d => d._date >= cutoff).map(d => { cum += d.amount; return { ...d, cumulative: Math.round(cum * 100) / 100 }; });
+                if (chartData.length === 0) return <div className="h-64 flex items-center justify-center text-gray-400 text-sm">No premium in this period.</div>;
                 return (
                   <ResponsiveContainer width="100%" height={300}>
                     <ComposedChart data={chartData}>
