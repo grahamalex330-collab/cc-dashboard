@@ -1583,7 +1583,7 @@ return {
                     </tr>
                   </thead>
                   <tbody>
-                    {[...new Set(allPositionsEver.map(p => p.ticker.toUpperCase()))].map(t => {
+                    {[...new Set([...allPositionsEver.map(p => p.ticker.toUpperCase()), ...data.calls.map(c => c.ticker.toUpperCase())])].map(t => {
                       const tClosed = closedCalls.filter(c => c.ticker.toUpperCase() === t);
                       const tPrem = tClosed.reduce((s, c) => s + netPrem(c), 0);
                       const tStock = realizedStockPnL.byTicker[t]?.realized || 0;
