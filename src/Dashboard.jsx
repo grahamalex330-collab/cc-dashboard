@@ -412,6 +412,7 @@ export default function CoveredCallDashboard() {
   const totalCapitalDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
   const realizedStockPnL = computeRealizedStockPnL(allPositionsEver, data.calls);
   const realizedPnLTotal = totalPremiumCollected + realizedStockPnL.totalRealized;
+  const totalUnrealized = activePositions.reduce((sum, p) => { const px = livePrices[p.ticker.toUpperCase()]; return px != null ? sum + (px - p.costBasis) * p.shares : sum; }, 0);
   const assignmentRate = computeAssignmentRate(data.calls);
   const activeCalls = openCalls.length;
   const upcomingEvents = data.events.filter((e) => new Date(e.date) >= new Date(today())).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 8);
@@ -1481,6 +1482,27 @@ return {
         )}
         {tab === "Analytics" && (
           <div className="space-y-6">
+            <Card className="p-5">
+              <div className="flex items-baseline justify-between mb-4 flex-wrap gap-1">
+                <h3 className="font-semibold text-gray-900">Total Return</h3>
+                <span className="text-xs text-gray-400">Premium + realized stock + unrealized — components shown, never blended into one rate</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm"><span className="text-gray-600">Premium income</span><span className="font-medium text-green-700">{formatCurrency(totalPremiumCollected)}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-gray-600">Realized stock P&L (assignments)</span><span className={`font-medium ${realizedStockPnL.totalRealized >= 0 ? "text-green-700" : "text-red-700"}`}>{formatCurrency(realizedStockPnL.totalRealized)}</span></div>
+                  <div className="flex justify-between text-sm border-t border-gray-200 pt-2 font-semibold"><span>Realized total (banked)</span><span className={realizedPnLTotal >= 0 ? "text-green-700" : "text-red-700"}>{formatCurrency(realizedPnLTotal)}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-gray-600">Unrealized (paper, current holdings)</span><span className={`font-medium ${totalUnrealized >= 0 ? "text-green-700" : "text-red-700"}`}>{formatCurrency(totalUnrealized)}</span></div>
+                  <div className="flex justify-between text-sm border-t border-gray-200 pt-2 font-bold"><span>Total incl. unrealized</span><span className={(realizedPnLTotal + totalUnrealized) >= 0 ? "text-green-700" : "text-red-700"}>{formatCurrency(realizedPnLTotal + totalUnrealized)}</span></div>
+                </div>
+                <div className="space-y-1.5 md:border-l md:border-gray-100 md:pl-6">
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">All-in realized return (annualized)</p>
+                  <div className="flex items-baseline gap-2"><span className={`text-3xl font-bold ${allInReturn.pctNow >= 0 ? "text-green-700" : "text-red-700"}`}>{formatPct(allInReturn.pctNow)}</span><span className="text-xs text-gray-400">on current capital ({formatCurrency(totalCapitalDeployed)})</span></div>
+                  <div className="flex items-baseline gap-2"><span className={`text-lg font-semibold ${allInReturn.pctEver >= 0 ? "text-green-700" : "text-red-700"}`}>{formatPct(allInReturn.pctEver)}</span><span className="text-xs text-gray-400">on all capital ever deployed ({formatCurrency(totalCapitalEverDeployed)})</span></div>
+                  <p className="text-xs text-amber-600 pt-1">Realized only — excludes unrealized paper{realizedStockPnL.totalSoldUnknown > 0 ? ` and ${realizedStockPnL.totalSoldUnknown.toLocaleString()} orphan-disposal shares (sale price not recorded), so it understates actual results` : ""}.</p>
+                </div>
+              </div>
+            </Card>
            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <StatCard icon={DollarSign} label="Total Premium" value={formatCurrency(totalPremiumCollected)} color="text-green-700" />
               <StatCard icon={TrendingUp} label={<Tip term="annualizedYield">Premium Yield (Ann.)</Tip>} value={formatPct(annualizedYield)} color="text-green-700" />
