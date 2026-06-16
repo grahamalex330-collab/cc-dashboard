@@ -278,6 +278,7 @@ export default function CoveredCallDashboard() {
   const [joined, setJoined] = useState(() => !!localStorage.getItem("cc_household_code"));
   const [data, setData] = useState(EMPTY_STATE);
   const [tab, setTab] = useState("Dashboard");
+  const [premChartView, setPremChartView] = useState("monthly");
   const [loading, setLoading] = useState(true);
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [showWriteCall, setShowWriteCall] = useState(false);
@@ -1517,101 +1518,50 @@ return {
 } sub="Net-positive cycles" />
               <StatCard icon={Shield} label="Assignment Rate" value={`${(assignmentRate.overall.rate * 100).toFixed(0)}%`} sub={`${assignmentRate.overall.assigned} of ${assignmentRate.overall.closed} closed`} color={assignmentRate.overall.rate > 0.4 ? "text-amber-600" : "text-gray-700"} />
             </div>
-            {/* Weekly Chart */}
+            {/* Premium Chart (Weekly/Monthly toggle) */}
             <Card className="p-5">
-              <h3 className="font-semibold text-gray-900 mb-4">Weekly Premium (Bar) + Cumulative (Line)</h3>
-              {premiumByWeek.length === 0 ? (
-                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">Close some trades to see chart data.</div>
-              ) : (
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={premiumByWeek}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="week" tick={{ fontSize: 11 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
-                    <Tooltip formatter={(v) => formatCurrency(v)} />
-                    <Bar yAxisId="left" dataKey="amount" fill="#10b981" radius={[4, 4, 0, 0]} name="Weekly" />
-                    <Line yAxisId="right" type="monotone" dataKey="cumulative" stroke="#1e40af" strokeWidth={2} dot={false} name="Cumulative" />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              )}
-            </Card>
-
-            {/* Monthly Chart */}
-            <Card className="p-5">
-              <h3 className="font-semibold text-gray-900 mb-4">Monthly Premium (Bar) + Cumulative (Line)</h3>
-              {premiumByMonth.length === 0 ? (
-                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">Close some trades to see chart data.</div>
-              ) : (
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={premiumByMonth}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
-                    <Tooltip formatter={(v) => formatCurrency(v)} />
-                    <Bar yAxisId="left" dataKey="amount" fill="#8b5cf6" radius={[4, 4, 0, 0]} name="Monthly" />
-                    <Line yAxisId="right" type="monotone" dataKey="cumulative" stroke="#1e40af" strokeWidth={2} dot={false} name="Cumulative" />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              )}
-            </Card>
-
-            {/* Per-Ticker Breakdown */}
-            <Card>
-              <div className="px-5 py-4 border-b border-gray-100">
-                <h3 className="font-semibold text-gray-900">Premium by Ticker</h3>
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                <h3 className="font-semibold text-gray-900">Premium Collected (Bar) + Cumulative (Line)</h3>
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+                  {["weekly", "monthly"].map(v => (
+                    <button key={v} onClick={() => setPremChartView(v)} className={`text-xs px-3 py-1 rounded-md capitalize ${premChartView === v ? "bg-white shadow-sm font-medium text-gray-900" : "text-gray-500"}`}>{v}</button>
+                  ))}
+                </div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
-                      <th className="px-5 py-3">Ticker</th>
-                      <th className="px-5 py-3">Trades</th>
-                      <th className="px-5 py-3">Gross Premium</th>
-                      <th className="px-5 py-3">Close Costs</th>
-                      <th className="px-5 py-3">Net Premium</th>
-                      <th className="px-5 py-3">Avg Premium/Trade</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(
-                      data.calls.reduce((acc, c) => {
-                        if (!acc[c.ticker]) acc[c.ticker] = { trades: 0, gross: 0, closeCost: 0 };
-                        acc[c.ticker].trades++;
-                        acc[c.ticker].gross += grossPrem(c);
-                        if (c.status === "closed") acc[c.ticker].closeCost += closeCostOf(c);
-                        return acc;
-                      }, {})
-                    ).map(([ticker, d]) => (
-                      <tr key={ticker} className="border-b border-gray-50 hover:bg-gray-50">
-                        <td className="px-5 py-3 font-bold">{ticker}</td>
-                        <td className="px-5 py-3">{d.trades}</td>
-                        <td className="px-5 py-3">{formatCurrency(d.gross)}</td>
-                        <td className="px-5 py-3 text-red-600">{d.closeCost > 0 ? formatCurrency(d.closeCost) : "—"}</td>
-                        <td className="px-5 py-3 text-green-700 font-medium">{formatCurrency(d.gross - d.closeCost)}</td>
-                        <td className="px-5 py-3">{formatCurrency((d.gross - d.closeCost) / d.trades)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-           </Card>
+              {(() => {
+                const isWeekly = premChartView === "weekly";
+                const chartData = isWeekly ? premiumByWeek : premiumByMonth;
+                if (chartData.length === 0) return <div className="h-64 flex items-center justify-center text-gray-400 text-sm">Close some trades to see chart data.</div>;
+                return (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <ComposedChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis dataKey={isWeekly ? "week" : "month"} tick={{ fontSize: 11 }} />
+                      <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
+                      <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
+                      <Tooltip formatter={(v) => formatCurrency(v)} />
+                      <Bar yAxisId="left" dataKey="amount" fill={isWeekly ? "#10b981" : "#8b5cf6"} radius={[4, 4, 0, 0]} name={isWeekly ? "Weekly" : "Monthly"} />
+                      <Line yAxisId="right" type="monotone" dataKey="cumulative" stroke="#1e40af" strokeWidth={2} dot={false} name="Cumulative" />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                );
+              })()}
+            </Card>
 
             {/* P&L by Ticker (premium + realized stock + unrealized + pending) */}
             <Card className="p-5">
               <h3 className="font-semibold text-gray-900 mb-1">P&L by Ticker</h3>
-              <p className="text-xs text-gray-500 mb-4">Realized + unrealized P&L per ticker, including premium income</p>
+              <p className="text-xs text-gray-500 mb-4">Premium + realized stock = <strong>realized</strong>; + unrealized = <strong>total</strong>. Realized stock excludes orphan disposals (⚠).</p>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-xs text-gray-500 border-b border-gray-200">
                       <th className="text-left py-2">TICKER</th>
-                      <th className="text-right py-2">PREMIUM (CLOSED)</th>
-                      <th className="text-right py-2">STOCK P&L (REALIZED)</th>
-                      <th className="text-right py-2">UNREALIZED P&L</th>
-                      <th className="text-right py-2">PENDING PREMIUM</th>
-                      <th className="text-right py-2 font-semibold">NET</th>
+                      <th className="text-right py-2">PREMIUM</th>
+                      <th className="text-right py-2">REALIZED STOCK</th>
+                      <th className="text-right py-2 font-semibold">= REALIZED</th>
+                      <th className="text-right py-2">UNREALIZED</th>
+                      <th className="text-right py-2 font-semibold">= TOTAL</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1625,7 +1575,8 @@ return {
                       const tActiveCost = tActive.reduce((s, p) => s + p.costBasis * p.shares, 0);
                       const tMktPrice = livePrices[t];
                       const tUnrealized = (tMktPrice && tActiveShares > 0) ? (tMktPrice * tActiveShares - tActiveCost) : null;
-                      const tNet = tPrem + tStock + (tUnrealized || 0);
+                      const tRealized = tPrem + tStock;
+                      const tNet = tRealized + (tUnrealized || 0);
                       const soldUnknown = realizedStockPnL.byTicker[t]?.soldSharesUnknownPrice || 0;
                       return (
                         <tr key={t} className="border-b border-gray-100">
@@ -1637,8 +1588,8 @@ return {
                           </td>
                           <td className="text-right">{formatCurrency(tPrem)}</td>
                           <td className={`text-right ${tStock >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(tStock)}</td>
+                          <td className={`text-right font-semibold ${tRealized >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(tRealized)}</td>
                           <td className={`text-right ${tUnrealized === null ? 'text-gray-400' : tUnrealized >= 0 ? 'text-green-700' : 'text-red-700'}`}>{tUnrealized !== null ? formatCurrency(tUnrealized) : '—'}</td>
-                          <td className="text-right text-gray-500">{tPending > 0 ? formatCurrency(tPending) : '—'}</td>
                           <td className={`text-right font-semibold ${tNet >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(tNet)}</td>
                         </tr>
                       );
