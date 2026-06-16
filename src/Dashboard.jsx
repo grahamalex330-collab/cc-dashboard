@@ -419,7 +419,7 @@ export default function CoveredCallDashboard() {
   const taxData = useMemo(() => data.calls.filter(c => c.status !== "open").map((c) => { const held = daysBetween(c.dateOpened, c.dateClosed || today()); const net = netPrem(c); const treatment = held > 365 ? "Long-term" : "Short-term"; const isLoss = net < 0; const nearbyTrades = data.calls.filter((o) => o.id !== c.id && o.ticker === c.ticker && Math.abs(daysBetween(c.dateClosed || today(), o.dateOpened)) <= 30); return { ...c, held, net, treatment, washSaleRisk: isLoss && nearbyTrades.length > 0 }; }), [data.calls]);
   const annualizedYield = useMemo(() => { if (totalCapitalEverDeployed === 0) return 0; const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return 0; const daysSinceFirst = daysBetween(allDates[0], today()); if (daysSinceFirst <= 0) return 0; return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst); }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
   const weeklyPL = useMemo(() => { const now = new Date(); const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`; const thisWeekCalls = data.calls.filter(c => { if (c.status === "open") return false; return (c.dateClosed || c.dateOpened) >= startKey; }); return { premium: thisWeekCalls.reduce((sum, c) => sum + netPrem(c), 0), trades: thisWeekCalls.length, callsWritten: data.calls.filter(c => (c.dateOpened || "") >= startKey).length }; }, [data.calls]);
-  const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const pCalls = callsForPosition(p, allPositionsEver, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => data.calls.some(c => c.status === "open" && c.ticker.toUpperCase() === t)).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio \u2014 heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of CC-strategy capital \u2014 consider diversifying (excludes cash and non-CC holdings).` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
+  const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const pCalls = callsForPosition(p, allPositionsEver, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => { const openSh = data.calls.filter(c => c.status === "open" && c.ticker.toUpperCase() === t).reduce((s, c) => s + (c.contracts || 0) * 100, 0); const heldSh = grouped[t]?.currentShares || 0; return heldSh > 0 && openSh >= heldSh; }).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio \u2014 heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of CC-strategy capital \u2014 consider diversifying (excludes cash and non-CC holdings).` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
 
   // Per-ticker strategy scorecard — rolls up lots per ticker for the Dashboard command-center view.
   // Positions tab stays lot-split; this is the summary-where-summary-helps layer.
@@ -460,9 +460,12 @@ export default function CoveredCallDashboard() {
           daysUncovered = Math.max(0, daysBetween(mostRecent.dateClosed || mostRecent.expiration, now));
         }
       }
+      const coveredShares = openCalls.reduce((s, c) => s + (c.contracts || 0) * 100, 0);
+      const uncoveredShares = Math.max(0, g.activeShares - coveredShares);
       let coverage = "uncovered";
       if (g.activeShares === 0 && g.assignedShares > 0) coverage = "fully_assigned";
-      else if (nearestOpen) coverage = "covered";
+      else if (nearestOpen && uncoveredShares <= 0) coverage = "covered";
+      else if (nearestOpen) coverage = "partial";
 return {
         ticker: g.ticker,
         totalShares: g.totalShares,
@@ -476,6 +479,8 @@ return {
         pendingPremium,
         nearestOpen,
         openCallCount: openCalls.length,
+        coveredShares,
+        uncoveredShares,
         daysUncovered,
         coverage,
       };
@@ -531,6 +536,19 @@ return {
           ticker: e.ticker,
           title: d === 0 ? `${e.title} today` : `${e.title} in ${d}d`,
           detail: `${e.ticker} has an open call — earnings risk`,
+        });
+      }
+    });
+
+    // 3b. Partially uncovered — held shares with no call written (income left on the table + downside exposure)
+    scorecard.forEach(s => {
+      if (s.coverage === "partial" && s.uncoveredShares >= 100) {
+        out.push({
+          key: `partial-${s.ticker}`,
+          severity: "medium",
+          ticker: s.ticker,
+          title: `${s.uncoveredShares.toLocaleString()} ${s.ticker} shares uncovered`,
+          detail: `${s.coveredShares.toLocaleString()} of ${s.activeShares.toLocaleString()} shares covered · ${s.uncoveredShares.toLocaleString()} naked`,
         });
       }
     });
@@ -689,6 +707,14 @@ return {
                       statusNode = (
                         <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
                           Covered · ${s.nearestOpen.strike} · {dteLabel}{callCountLabel}
+                        </span>
+                      );
+                    } else if (s.coverage === "partial" && s.nearestOpen) {
+                      const dte = daysBetween(today(), s.nearestOpen.expiration);
+                      const dteLabel = dte === 0 ? "today" : dte === 1 ? "1d" : `${dte}d`;
+                      statusNode = (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                          Partial · ${s.nearestOpen.strike} · {dteLabel} · {s.uncoveredShares.toLocaleString()} uncovered
                         </span>
                       );
                     } else if (s.coverage === "fully_assigned") {
