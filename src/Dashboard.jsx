@@ -77,9 +77,18 @@ const buildTickerAttribution = (ticker, allPositions, allCalls) => {
 // ANALYTICS HELPERS (added session 3)
 // ============================================================
 
-// Realized stock P&L from assignment disposals, attributed via FIFO.
-// Returns { byTicker: { TICKER: { realized, soldSharesUnknownPrice } }, totalRealized, totalSoldUnknown }
-// Lots sold outside assignments (no closePrice stored) are flagged as soldSharesUnknownPrice.
+// ESTIMATED placeholder sale prices for lots sold OUTSIDE assignment (real Morgan Stanley prices pending).
+// Flagged "est" / "ESTIMATED" everywhere it surfaces; delete once real disposalPrice/disposalDate are entered
+// via the schema-backed path (see Orphan_Disposal_Fix_Spec.md). Keyed by position lot id.
+const ESTIMATED_DISPOSALS = {
+  10: { price: 158, date: "2026-05-15" }, // PLTR ~400 sh sold outside assignment (est.)
+  11: { price: 158, date: "2026-05-15" }, // PLTR 700 sh (est.)
+  12: { price: 158, date: "2026-05-15" }, // PLTR 700 sh (est.)
+  13: { price: 158, date: "2026-05-15" }, // PLTR 700 sh (est.)
+};
+
+// Realized stock P&L from assignment disposals, attributed via FIFO. Manual/estimated disposals fold in too.
+// Returns { byTicker, totalRealized, totalSoldUnknown, totalEstimatedRealized, realizedEvents }
 const computeRealizedStockPnL = (allPositions, allCalls) => {
   const byTicker = {};
   const realizedEvents = [];
@@ -101,14 +110,29 @@ const computeRealizedStockPnL = (allPositions, allCalls) => {
       realized += callRealized;
       realizedEvents.push({ date: call.dateClosed || call.expiration || call.expiry || '', ticker: t, amount: callRealized });
     }
-    const soldSharesUnknownPrice = posns
-      .filter(p => p.removed)
-      .reduce((s, p) => s + Math.max(0, p.shares - (lotConsumedShares.get(p.id) || 0)), 0);
-    byTicker[t] = { realized, soldSharesUnknownPrice };
+    let soldSharesUnknownPrice = 0;
+    let estimatedRealized = 0;
+    for (const p of posns.filter(p => p.removed)) {
+      const unaccounted = Math.max(0, p.shares - (lotConsumedShares.get(p.id) || 0));
+      if (unaccounted <= 0) continue;
+      const real = p.disposalPrice != null ? { price: p.disposalPrice, date: p.disposalDate } : null;
+      const est = real ? null : ESTIMATED_DISPOSALS[p.id];
+      const disp = real || est;
+      if (disp) {
+        const gain = (disp.price - p.costBasis) * unaccounted;
+        realized += gain;
+        if (est) estimatedRealized += gain;
+        realizedEvents.push({ date: disp.date || '', ticker: t, amount: gain, estimated: !!est });
+      } else {
+        soldSharesUnknownPrice += unaccounted;
+      }
+    }
+    byTicker[t] = { realized, soldSharesUnknownPrice, estimatedRealized };
   }
   const totalRealized = Object.values(byTicker).reduce((s, v) => s + v.realized, 0);
   const totalSoldUnknown = Object.values(byTicker).reduce((s, v) => s + v.soldSharesUnknownPrice, 0);
-  return { byTicker, totalRealized, totalSoldUnknown, realizedEvents };
+  const totalEstimatedRealized = Object.values(byTicker).reduce((s, v) => s + (v.estimatedRealized || 0), 0);
+  return { byTicker, totalRealized, totalSoldUnknown, totalEstimatedRealized, realizedEvents };
 };
 
 // Per-call cycle P&L. Used for Win Rate.
@@ -1533,7 +1557,7 @@ return {
                       <div className="flex items-baseline gap-2"><span className={`text-lg font-semibold ${totalReturnPeriod.realized >= 0 ? "text-green-700" : "text-red-700"}`}>{totalCapitalDeployed > 0 ? formatPct(totalReturnPeriod.realized / totalCapitalDeployed) : "—"}</span><span className="text-xs text-gray-400">of current capital this period (not annualized)</span></div>
                     </>
                   )}
-                  <p className="text-xs text-amber-600 pt-1">Realized only — excludes unrealized paper{realizedStockPnL.totalSoldUnknown > 0 ? ` and ${realizedStockPnL.totalSoldUnknown.toLocaleString()} orphan-disposal shares (sale price not recorded), so it understates actual results` : ""}.</p>
+                  <p className="text-xs text-amber-600 pt-1">Realized only — excludes unrealized paper{realizedStockPnL.totalSoldUnknown > 0 ? ` and ${realizedStockPnL.totalSoldUnknown.toLocaleString()} unpriced remnant shares` : ""}.{realizedStockPnL.totalEstimatedRealized ? ` Includes ${formatCurrency(realizedStockPnL.totalEstimatedRealized)} of ESTIMATED PLTR disposal gains (placeholder $158 — replace with real Morgan Stanley prices).` : ""}</p>
                 </div>
               </div>
             </Card>
@@ -1622,12 +1646,16 @@ return {
                       const tRealized = tPrem + tStock;
                       const tNet = tRealized + (tUnrealized || 0);
                       const soldUnknown = realizedStockPnL.byTicker[t]?.soldSharesUnknownPrice || 0;
+                      const estRealized = realizedStockPnL.byTicker[t]?.estimatedRealized || 0;
                       return (
                         <tr key={t} className="border-b border-gray-100">
                           <td className="py-2 font-semibold">
                             {t}
                             {soldUnknown > 0 && (
                               <span className="text-xs text-amber-600 ml-1" title={`${soldUnknown} shares sold outside assignment — stock P&L excludes these`}>⚠</span>
+                            )}
+                            {estRealized !== 0 && (
+                              <span className="text-xs text-amber-600 ml-1" title="Includes ESTIMATED disposal gains (placeholder price, not final)">est</span>
                             )}
                           </td>
                           <td className="text-right">{formatCurrency(tPrem)}</td>
@@ -1641,9 +1669,10 @@ return {
                   </tbody>
                 </table>
               </div>
-              {realizedStockPnL.totalSoldUnknown > 0 && (
+              {(realizedStockPnL.totalSoldUnknown > 0 || realizedStockPnL.totalEstimatedRealized) && (
                 <p className="text-xs text-amber-600 mt-3">
-                  ⚠ {realizedStockPnL.totalSoldUnknown} shares were sold outside assignments. Stock P&L on those disposals isn't captured (sale price not stored on the lot).
+                  {realizedStockPnL.totalEstimatedRealized ? `⚠ Includes ${formatCurrency(realizedStockPnL.totalEstimatedRealized)} of ESTIMATED PLTR disposal gains (placeholder $158/sh, pending real Morgan Stanley prices). ` : ""}
+                  {realizedStockPnL.totalSoldUnknown > 0 ? `${realizedStockPnL.totalSoldUnknown} remnant shares still have no recorded sale price.` : ""}
                 </p>
               )}
             </Card>
@@ -1877,7 +1906,7 @@ return {
       <div className="text-sm text-amber-900">
         <p className="font-semibold mb-1">Premium income only — stock disposals not included</p>
         <p className="text-amber-800">
-          This view shows option premium income from CC trades. It does <strong>not</strong> include capital gains or losses from shares sold via assignment (<strong>{formatCurrency(realizedStockPnL.totalRealized)}</strong> realized stock P&L, attributed via FIFO). Net taxable picture including that is roughly <strong>{formatCurrency(realizedPnLTotal)}</strong>, not the {formatCurrency(totalPremiumCollected)} premium-only figure shown above.{realizedStockPnL.totalSoldUnknown > 0 ? ` This still excludes ${realizedStockPnL.totalSoldUnknown.toLocaleString()} shares sold outside assignment, whose disposal price isn't stored.` : ""} Consult your CPA before filing.
+          This view shows option premium income from CC trades. It does <strong>not</strong> include capital gains or losses from shares sold via assignment (<strong>{formatCurrency(realizedStockPnL.totalRealized)}</strong> realized stock P&L, attributed via FIFO). Net taxable picture including that is roughly <strong>{formatCurrency(realizedPnLTotal)}</strong>, not the {formatCurrency(totalPremiumCollected)} premium-only figure shown above.{realizedStockPnL.totalSoldUnknown > 0 ? ` This still excludes ${realizedStockPnL.totalSoldUnknown.toLocaleString()} unpriced remnant shares.` : ""}{realizedStockPnL.totalEstimatedRealized ? ` NOTE: figures include ${formatCurrency(realizedStockPnL.totalEstimatedRealized)} of ESTIMATED PLTR disposal gains (placeholder price, not final).` : ""} Consult your CPA before filing.
 
          </p>
       </div>
