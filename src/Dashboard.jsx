@@ -161,6 +161,20 @@ const callCyclePnL = (call, allPositions, allCalls) => {
   return null;
 };
 
+// Shares (and proceeds) actually attributed to THIS lot by assigned calls, via FIFO takes.
+// Never sum call.contracts*100 per lot — a call spanning multiple lots double-counts (the "-195 shares" bug).
+const assignmentForPosition = (position, allPositions, allCalls) => {
+  const map = buildTickerAttribution(position.ticker, allPositions, allCalls);
+  let shares = 0, proceeds = 0;
+  for (const call of allCalls) {
+    if (call.status !== "assigned" || call.ticker.toUpperCase() !== position.ticker.toUpperCase()) continue;
+    for (const a of (map.get(call.id) || [])) {
+      if (a.posId === position.id) { shares += a.shares; proceeds += call.strike * a.shares; }
+    }
+  }
+  return { shares, proceeds };
+};
+
 // Pending premium from open (unrealized) calls, by ticker and total.
 const computePendingPremium = (allCalls) => {
   const byTicker = {};
@@ -467,7 +481,7 @@ export default function CoveredCallDashboard() {
     return { premium, stock, realized: premium + stock };
   }, [totalReturnRange, data.calls, realizedStockPnL]);
   const weeklyPL = useMemo(() => { const now = new Date(); const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`; const thisWeekCalls = data.calls.filter(c => { if (c.status === "open") return false; return (c.dateClosed || c.dateOpened) >= startKey; }); const endOfWeek = new Date(startOfWeek); endOfWeek.setDate(startOfWeek.getDate() + 6); const endKey = `${endOfWeek.getFullYear()}-${String(endOfWeek.getMonth() + 1).padStart(2, "0")}-${String(endOfWeek.getDate()).padStart(2, "0")}`; const expiring = data.calls.filter(c => c.status === "open" && (c.expiration || "") >= startKey && (c.expiration || "") <= endKey); return { premium: thisWeekCalls.reduce((sum, c) => sum + netPrem(c), 0), trades: thisWeekCalls.length, callsWritten: data.calls.filter(c => (c.dateOpened || "") >= startKey).length, pendingExpiring: expiring.reduce((s, c) => s + grossPrem(c), 0), expiringCount: expiring.length }; }, [data.calls]);
-  const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const pCalls = callsForPosition(p, allPositionsEver, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => { const openSh = data.calls.filter(c => c.status === "open" && c.ticker.toUpperCase() === t).reduce((s, c) => s + (c.contracts || 0) * 100, 0); const heldSh = grouped[t]?.currentShares || 0; return heldSh > 0 && openSh >= heldSh; }).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio \u2014 heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of CC-strategy capital \u2014 consider diversifying (excludes cash and non-CC holdings).` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
+  const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const assignedShares = assignmentForPosition(p, allPositionsEver, data.calls).shares; const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => { const openSh = data.calls.filter(c => c.status === "open" && c.ticker.toUpperCase() === t).reduce((s, c) => s + (c.contracts || 0) * 100, 0); const heldSh = grouped[t]?.currentShares || 0; return heldSh > 0 && openSh >= heldSh; }).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio \u2014 heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of CC-strategy capital \u2014 consider diversifying (excludes cash and non-CC holdings).` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
 
   // Per-ticker strategy scorecard — rolls up lots per ticker for the Dashboard command-center view.
   // Positions tab stays lot-split; this is the summary-where-summary-helps layer.
@@ -478,8 +492,7 @@ export default function CoveredCallDashboard() {
     const grouped = {};
     activePositions.forEach(p => {
       const t = p.ticker.toUpperCase();
-      const pCalls = callsForPosition(p, allPositionsEver, data.calls);
-      const assignedSharesLot = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+      const assignedSharesLot = assignmentForPosition(p, allPositionsEver, data.calls).shares;
       const lotActiveShares = Math.max(0, p.shares - assignedSharesLot);
       const lotActiveCost = p.costBasis * lotActiveShares;
       const earnedLot = weightedPremium(p, allPositionsEver, data.calls);
@@ -954,7 +967,7 @@ return {
                           const pCalls = callsForPosition(p, allPositionsEver, data.calls);
                           const pOpen = pCalls.filter((c) => c.status === "open").length;
                           const pEarned = weightedPremium(p, allPositionsEver, data.calls);
-                          const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+                          const assignedShares = assignmentForPosition(p, allPositionsEver, data.calls).shares;
                           const currentShares = p.shares - assignedShares;
                           return (
                             <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50">
@@ -1172,9 +1185,10 @@ return {
                       {activePositions.map((p) => {
                         const pCalls = callsForPosition(p, allPositionsEver, data.calls);
                         const earned = weightedPremium(p, allPositionsEver, data.calls);
-                        const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0);
+                        const pAssign = assignmentForPosition(p, allPositionsEver, data.calls);
+                        const assignedShares = pAssign.shares;
                         const currentShares = p.shares - assignedShares;
-                        const assignmentProceeds = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.strike * c.contracts * 100, 0);
+                        const assignmentProceeds = pAssign.proceeds;
                         // Weight assignment proceeds same as premium for multi-lot positions
                         const t = p.ticker.toUpperCase();
                         const tickerPositions = activePositions.filter(ap => ap.ticker.toUpperCase() === t);
