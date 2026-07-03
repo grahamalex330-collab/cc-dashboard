@@ -18,6 +18,9 @@ const GLOSSARY = {
   assignment: "When the option buyer exercises their right to buy your shares at the strike price. This happens when the call is ITM at expiration (or sometimes early).",
   rollForward: "Closing your current call (buying to close) and simultaneously opening a new one at a later expiration and/or different strike. Used to avoid assignment or collect more premium.",
   washSale: "An IRS rule: if you sell a security at a loss and buy a 'substantially identical' security within 30 days before or after, the loss is disallowed for tax purposes.",
+  totalTrades: "Every covered call you've written — open, expired, assigned, or bought to close. An activity count, not a P&L figure.",
+  winRate: "Share of closed call cycles that were net-positive on premium. Higher is better, but it does not account for stock P&L on assignments.",
+  assignmentRate: "Share of closed calls that were assigned (shares called away). Neither good nor bad alone — assignment above cost basis is a win, below is a forced loss.",
   annualizedYield: "Premium income annualized over capital ever deployed. Calculated as: (premium collected / capital ever deployed) × (365 / days active). Income-rate metric only — does not subtract stock losses on assignments. Compare with Realized P&L for a fuller picture.",
   allInReturn: "Total REALIZED return — premium income plus realized stock P&L from assignments — annualized. Headline % is over capital currently deployed; the secondary % is over all capital ever deployed (inflated by the wheel recycling the same dollars). Realized only: excludes unrealized paper gains, and excludes orphan-disposal shares whose sale price isn't recorded, so it understates actual results. Compare with the premium-only yield.",
   totalPremium: "Net premium income from all closed covered calls (gross premium minus any buy-to-close costs). Excludes premium on currently open calls until they resolve.",
@@ -306,9 +309,10 @@ export default function CoveredCallDashboard() {
   const [joined, setJoined] = useState(() => !!localStorage.getItem("cc_household_code"));
   const [data, setData] = useState(EMPTY_STATE);
   const [tab, setTab] = useState("Dashboard");
-  const [premChartView, setPremChartView] = useState("monthly");
-  const [premChartRange, setPremChartRange] = useState("all");
-  const [totalReturnRange, setTotalReturnRange] = useState("all");
+  const [premChartView, setPremChartView] = useState(() => { try { return localStorage.getItem("cc_premChartView") || "monthly"; } catch { return "monthly"; } });
+  const [premChartRange, setPremChartRange] = useState(() => { try { return localStorage.getItem("cc_premChartRange") || "all"; } catch { return "all"; } });
+  const [totalReturnRange, setTotalReturnRange] = useState(() => { try { return localStorage.getItem("cc_totalReturnRange") || "all"; } catch { return "all"; } });
+  useEffect(() => { try { localStorage.setItem("cc_premChartView", premChartView); localStorage.setItem("cc_premChartRange", premChartRange); localStorage.setItem("cc_totalReturnRange", totalReturnRange); } catch {} }, [premChartView, premChartRange, totalReturnRange]);
   const [loading, setLoading] = useState(true);
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [showWriteCall, setShowWriteCall] = useState(false);
@@ -1564,8 +1568,8 @@ return {
            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <StatCard icon={DollarSign} label="Total Premium" value={formatCurrency(totalPremiumCollected)} color="text-green-700" />
               <StatCard icon={TrendingUp} label={<Tip term="annualizedYield">Premium Yield (Ann.)</Tip>} value={formatPct(annualizedYield)} color="text-green-700" />
-              <StatCard icon={BarChart3} label="Total Trades" value={data.calls.length} />
-              <StatCard icon={Target} label="Win Rate" value={
+              <StatCard icon={BarChart3} label={<Tip term="totalTrades">Total Trades</Tip>} value={data.calls.length} />
+              <StatCard icon={Target} label={<Tip term="winRate">Win Rate</Tip>} value={
   closedCalls.length > 0
     ? `${((closedCalls.filter(c => {
         const pnl = callCyclePnL(c, allPositionsEver, data.calls);
@@ -1573,7 +1577,7 @@ return {
       }).length / closedCalls.length) * 100).toFixed(0)}%`
     : "—"
 } sub="Net-positive cycles" />
-              <StatCard icon={Shield} label="Assignment Rate" value={`${(assignmentRate.overall.rate * 100).toFixed(0)}%`} sub={`${assignmentRate.overall.assigned} of ${assignmentRate.overall.closed} closed`} color={assignmentRate.overall.rate > 0.4 ? "text-amber-600" : "text-gray-700"} />
+              <StatCard icon={Shield} label={<Tip term="assignmentRate">Assignment Rate</Tip>} value={`${(assignmentRate.overall.rate * 100).toFixed(0)}%`} sub={`${assignmentRate.overall.assigned} of ${assignmentRate.overall.closed} closed`} color={assignmentRate.overall.rate > 0.4 ? "text-amber-600" : "text-gray-700"} />
             </div>
             {/* Premium Chart (Weekly/Monthly toggle) */}
             <Card className="p-5">
