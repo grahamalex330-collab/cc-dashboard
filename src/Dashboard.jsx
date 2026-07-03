@@ -824,9 +824,9 @@ return {
 
          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <StatCard icon={DollarSign} label={<Tip term="totalPremium">Total Premium</Tip>} value={formatCurrency(totalPremiumCollected)} sub="Net collected" color="text-green-700" />
-              <StatCard icon={DollarSign} label={<Tip term="realizedPnL">Realized P&L</Tip>} value={formatCurrency(realizedPnLTotal)} sub="Stock + premium" color={realizedPnLTotal >= 0 ? "text-green-700" : "text-red-700"} />
+              <StatCard icon={DollarSign} label={<Tip term="realizedPnL">Realized P&L</Tip>} value={formatCurrency(realizedPnLTotal)} sub={realizedStockPnL.totalEstimatedRealized ? "Stock + premium · incl. estimate" : "Stock + premium"} color={realizedPnLTotal >= 0 ? "text-green-700" : "text-red-700"} />
               <StatCard icon={Target} label={<Tip term="activeCalls">Active Calls</Tip>} value={activeCalls} sub={`${activePositions.length} positions`} />
-              <StatCard icon={TrendingUp} label={<Tip term="allInReturn">All-In Return (Ann.)</Tip>} value={formatPct(allInReturn.pctNow)} sub={`Realized · ${formatPct(allInReturn.pctEver)} on capital ever deployed`} color={realizedPnLTotal > 0 ? "text-green-700" : realizedPnLTotal < 0 ? "text-red-700" : "text-gray-900"} />
+              <StatCard icon={TrendingUp} label={<Tip term="allInReturn">All-In Return (Ann.)</Tip>} value={formatPct(allInReturn.pctNow)} sub={`Realized · ${formatPct(allInReturn.pctEver)} on capital ever deployed${realizedStockPnL.totalEstimatedRealized ? " · incl. estimate" : ""}`} color={realizedPnLTotal > 0 ? "text-green-700" : realizedPnLTotal < 0 ? "text-red-700" : "text-gray-900"} />
               <StatCard icon={DollarSign} label={<Tip term="capitalDeployed">Capital Deployed</Tip>} value={formatCurrency(totalCapitalDeployed)} />
             </div>
 
@@ -1561,7 +1561,7 @@ return {
                       <div className="flex items-baseline gap-2"><span className={`text-lg font-semibold ${totalReturnPeriod.realized >= 0 ? "text-green-700" : "text-red-700"}`}>{totalCapitalDeployed > 0 ? formatPct(totalReturnPeriod.realized / totalCapitalDeployed) : "—"}</span><span className="text-xs text-gray-400">of current capital this period (not annualized)</span></div>
                     </>
                   )}
-                  <p className="text-xs text-amber-600 pt-1">Realized only — excludes unrealized paper{realizedStockPnL.totalSoldUnknown > 0 ? ` and ${realizedStockPnL.totalSoldUnknown.toLocaleString()} unpriced remnant shares` : ""}.{realizedStockPnL.totalEstimatedRealized ? ` Includes ${formatCurrency(realizedStockPnL.totalEstimatedRealized)} of ESTIMATED PLTR disposal gains (placeholder $158 — replace with real Morgan Stanley prices).` : ""}</p>
+                  <p className="text-xs text-amber-600 pt-1">Realized cash only — paper gains not included.{realizedStockPnL.totalEstimatedRealized ? ` Includes ${formatCurrency(realizedStockPnL.totalEstimatedRealized)} estimated PLTR sale gains (placeholder price).` : ""}</p>
                 </div>
               </div>
             </Card>
@@ -1675,8 +1675,8 @@ return {
               </div>
               {(realizedStockPnL.totalSoldUnknown > 0 || realizedStockPnL.totalEstimatedRealized) && (
                 <p className="text-xs text-amber-600 mt-3">
-                  {realizedStockPnL.totalEstimatedRealized ? `⚠ Includes ${formatCurrency(realizedStockPnL.totalEstimatedRealized)} of ESTIMATED PLTR disposal gains (placeholder $158/sh, pending real Morgan Stanley prices). ` : ""}
-                  {realizedStockPnL.totalSoldUnknown > 0 ? `${realizedStockPnL.totalSoldUnknown} remnant shares still have no recorded sale price.` : ""}
+                  {realizedStockPnL.totalEstimatedRealized ? `⚠ Includes ${formatCurrency(realizedStockPnL.totalEstimatedRealized)} estimated PLTR sale gains (placeholder price — update with real Morgan Stanley prices). ` : ""}
+                  {realizedStockPnL.totalSoldUnknown > 0 ? `${realizedStockPnL.totalSoldUnknown} small remnant shares have no sale price recorded.` : ""}
                 </p>
               )}
             </Card>
@@ -1910,7 +1910,7 @@ return {
       <div className="text-sm text-amber-900">
         <p className="font-semibold mb-1">Premium income only — stock disposals not included</p>
         <p className="text-amber-800">
-          This view shows option premium income from CC trades. It does <strong>not</strong> include capital gains or losses from shares sold via assignment (<strong>{formatCurrency(realizedStockPnL.totalRealized)}</strong> realized stock P&L, attributed via FIFO). Net taxable picture including that is roughly <strong>{formatCurrency(realizedPnLTotal)}</strong>, not the {formatCurrency(totalPremiumCollected)} premium-only figure shown above.{realizedStockPnL.totalSoldUnknown > 0 ? ` This still excludes ${realizedStockPnL.totalSoldUnknown.toLocaleString()} unpriced remnant shares.` : ""}{realizedStockPnL.totalEstimatedRealized ? ` NOTE: figures include ${formatCurrency(realizedStockPnL.totalEstimatedRealized)} of ESTIMATED PLTR disposal gains (placeholder price, not final).` : ""} Consult your CPA before filing.
+          This view shows option premium income from CC trades. It does <strong>not</strong> include capital gains or losses from shares sold via assignment (<strong>{formatCurrency(realizedStockPnL.totalRealized)}</strong> realized stock P&L, attributed via FIFO). Net taxable picture including that is roughly <strong>{formatCurrency(realizedPnLTotal)}</strong>, not the {formatCurrency(totalPremiumCollected)} premium-only figure shown above.{realizedStockPnL.totalSoldUnknown > 0 ? ` This still excludes ${realizedStockPnL.totalSoldUnknown.toLocaleString()} unpriced remnant shares.` : ""}{realizedStockPnL.totalEstimatedRealized ? ` Includes ${formatCurrency(realizedStockPnL.totalEstimatedRealized)} of estimated PLTR sale gains (placeholder price, not final — confirm before filing).` : ""} Consult your CPA before filing.
 
          </p>
       </div>
