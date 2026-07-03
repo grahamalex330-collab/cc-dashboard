@@ -28,7 +28,7 @@ const GLOSSARY = {
   activeCalls: "Number of covered calls currently open (not yet expired or assigned). Each contract covers 100 shares.",
   capitalDeployed: "Cost basis of all currently active stock positions. Does not include cash, removed lots, or non-CC holdings.",
   breakeven: "The stock price at which you neither make nor lose money on the combined position (shares + call). Equals your cost basis minus premium received.",
-  assignmentRisk: "How likely your call is to be assigned. Based on how close the stock price is to your strike. ITM = very high risk. Within 2% = high. 2-5% = moderate. 5%+ = low.",
+  assignmentRisk: "How likely your call is to be assigned, based on how close the price is to your strike. Assignment is not automatically bad: if the strike is above your cost basis, being assigned locks in a stock GAIN on top of the premium you kept. The line under the badge shows what assignment would mean in dollars.",
   capitalUtilization: "What percentage of your stock positions currently have calls written against them. Higher = more income generation. 100% means every position is covered.",
   concentration: "How much of your total portfolio is in a single stock. Over 40% in one name increases your risk if that stock drops significantly.",
   volumeVsAvg: "Trading volume compared to the stock's average daily volume. Values above 1.5x suggest unusual activity \u2014 often driven by news, earnings, or institutional interest \u2014 which typically means better options liquidity and premiums.",
@@ -280,6 +280,7 @@ const Tip = ({ term, children }) => {
 const EtradeTip = ({ children }) => (<div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 flex items-start gap-2.5"><Info size={16} className="text-indigo-500 mt-0.5 shrink-0" /><div className="text-xs text-indigo-800 leading-relaxed">{children}</div></div>);
  
 const formatCurrency = (n) => { if (n === undefined || n === null || isNaN(n)) return "$0.00"; return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n); };
+const formatDollars = (n) => (n === undefined || n === null || isNaN(n)) ? "$0" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 const formatPct = (n) => (n === undefined || isNaN(n) ? "0.00%" : (n * 100).toFixed(2) + "%");
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const parseLocalDate = (s) => { if (!s) return new Date(); const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
@@ -454,7 +455,7 @@ export default function CoveredCallDashboard() {
  
   const premiumByWeek = useMemo(() => { const weeks = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const [y, m, d] = (dateStr || "").split("-").map(Number); if (!y) return; const dt = new Date(y, m - 1, d); const weekStart = new Date(dt); weekStart.setDate(dt.getDate() - dt.getDay()); const key = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`; weeks[key] = (weeks[key] || 0) + netPrem(c); }); const sorted = Object.entries(weeks).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([week, amount]) => { cum += amount; return { week: week.slice(5), _date: week, amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
   const premiumByMonth = useMemo(() => { const months = {}; data.calls.filter(c => c.status !== "open").forEach((c) => { const dateStr = c.dateClosed || c.dateOpened; const key = (dateStr || "").slice(0, 7); if (!key || key.length < 7) return; months[key] = (months[key] || 0) + netPrem(c); }); const sorted = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)); let cum = 0; return sorted.map(([month, amount]) => { cum += amount; return { month, _date: month + "-01", amount: Math.round(amount * 100) / 100, cumulative: Math.round(cum * 100) / 100 }; }); }, [data.calls]);
-  const taxData = useMemo(() => data.calls.filter(c => c.status !== "open").map((c) => { const held = daysBetween(c.dateOpened, c.dateClosed || today()); const net = netPrem(c); const treatment = held > 365 ? "Long-term" : "Short-term"; const isLoss = net < 0; const nearbyTrades = data.calls.filter((o) => o.id !== c.id && o.ticker === c.ticker && Math.abs(daysBetween(c.dateClosed || today(), o.dateOpened)) <= 30); return { ...c, held, net, treatment, washSaleRisk: isLoss && nearbyTrades.length > 0 }; }), [data.calls]);
+  const taxData = useMemo(() => data.calls.filter(c => c.status !== "open").map((c) => { const held = daysBetween(c.dateOpened, c.dateClosed || today()); const net = netPrem(c); const treatment = held > 365 ? "Long-term" : "Short-term"; return { ...c, held, net, treatment }; }), [data.calls]);
   const annualizedYield = useMemo(() => { if (totalCapitalEverDeployed === 0) return 0; const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return 0; const daysSinceFirst = daysBetween(allDates[0], today()); if (daysSinceFirst <= 0) return 0; return (totalPremiumCollected / totalCapitalEverDeployed) * (365 / daysSinceFirst); }, [totalPremiumCollected, totalCapitalEverDeployed, data.calls]);
   const allInReturn = useMemo(() => { const allDates = data.calls.map(c => c.dateOpened).filter(Boolean).sort(); if (allDates.length === 0) return { pctNow: 0, pctEver: 0 }; const days = daysBetween(allDates[0], today()); if (days <= 0) return { pctNow: 0, pctEver: 0 }; const pctNow = totalCapitalDeployed > 0 ? (realizedPnLTotal / totalCapitalDeployed) * (365 / days) : 0; const pctEver = totalCapitalEverDeployed > 0 ? (realizedPnLTotal / totalCapitalEverDeployed) * (365 / days) : 0; return { pctNow, pctEver }; }, [realizedPnLTotal, totalCapitalDeployed, totalCapitalEverDeployed, data.calls]);
   const totalReturnPeriod = useMemo(() => {
@@ -465,7 +466,7 @@ export default function CoveredCallDashboard() {
     const stock = (realizedStockPnL.realizedEvents || []).filter(e => (e.date || "") >= cutoff).reduce((s, e) => s + e.amount, 0);
     return { premium, stock, realized: premium + stock };
   }, [totalReturnRange, data.calls, realizedStockPnL]);
-  const weeklyPL = useMemo(() => { const now = new Date(); const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`; const thisWeekCalls = data.calls.filter(c => { if (c.status === "open") return false; return (c.dateClosed || c.dateOpened) >= startKey; }); return { premium: thisWeekCalls.reduce((sum, c) => sum + netPrem(c), 0), trades: thisWeekCalls.length, callsWritten: data.calls.filter(c => (c.dateOpened || "") >= startKey).length }; }, [data.calls]);
+  const weeklyPL = useMemo(() => { const now = new Date(); const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); const startKey = `${startOfWeek.getFullYear()}-${String(startOfWeek.getMonth() + 1).padStart(2, "0")}-${String(startOfWeek.getDate()).padStart(2, "0")}`; const thisWeekCalls = data.calls.filter(c => { if (c.status === "open") return false; return (c.dateClosed || c.dateOpened) >= startKey; }); const endOfWeek = new Date(startOfWeek); endOfWeek.setDate(startOfWeek.getDate() + 6); const endKey = `${endOfWeek.getFullYear()}-${String(endOfWeek.getMonth() + 1).padStart(2, "0")}-${String(endOfWeek.getDate()).padStart(2, "0")}`; const expiring = data.calls.filter(c => c.status === "open" && (c.expiration || "") >= startKey && (c.expiration || "") <= endKey); return { premium: thisWeekCalls.reduce((sum, c) => sum + netPrem(c), 0), trades: thisWeekCalls.length, callsWritten: data.calls.filter(c => (c.dateOpened || "") >= startKey).length, pendingExpiring: expiring.reduce((s, c) => s + grossPrem(c), 0), expiringCount: expiring.length }; }, [data.calls]);
   const concentration = useMemo(() => { if (activePositions.length === 0) return { positions: [], maxPct: 0, sectorConcentration: [], warning: null }; const grouped = {}; activePositions.forEach(p => { const t = p.ticker.toUpperCase(); const pCalls = callsForPosition(p, allPositionsEver, data.calls); const assignedShares = pCalls.filter(c => c.status === "assigned").reduce((s, c) => s + c.contracts * 100, 0); const currentShares = p.shares - assignedShares; if (currentShares <= 0) return; if (!grouped[t]) grouped[t] = { ticker: p.ticker, value: 0, currentShares: 0 }; grouped[t].value += p.costBasis * currentShares; grouped[t].currentShares += currentShares; }); const totalActiveValue = Object.values(grouped).reduce((s, g) => s + g.value, 0); const positions = Object.values(grouped).map(g => ({ ...g, pct: totalActiveValue > 0 ? g.value / totalActiveValue : 0 })).sort((a, b) => b.pct - a.pct); const maxPct = positions[0]?.pct || 0; const uniqueTickers = positions.map(p => p.ticker.toUpperCase()); const coveredCount = uniqueTickers.filter(t => { const openSh = data.calls.filter(c => c.status === "open" && c.ticker.toUpperCase() === t).reduce((s, c) => s + (c.contracts || 0) * 100, 0); const heldSh = grouped[t]?.currentShares || 0; return heldSh > 0 && openSh >= heldSh; }).length; const utilizationPct = uniqueTickers.length > 0 ? coveredCount / uniqueTickers.length : 0; let warning = null; if (maxPct > 0.6) warning = { level: "high", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of your portfolio \u2014 heavy concentration risk.` }; else if (maxPct > 0.4) warning = { level: "medium", msg: `${positions[0].ticker} is ${(maxPct * 100).toFixed(0)}% of CC-strategy capital \u2014 consider diversifying (excludes cash and non-CC holdings).` }; return { positions, maxPct, utilizationPct, coveredCount, totalUnique: uniqueTickers.length, warning }; }, [activePositions, totalCapitalDeployed, data.calls]);
 
   // Per-ticker strategy scorecard — rolls up lots per ticker for the Dashboard command-center view.
@@ -781,15 +782,21 @@ return {
                         <div className="flex items-baseline justify-between flex-wrap gap-2">
                           <div className="flex items-baseline gap-3 flex-wrap">
                             <span className="font-bold text-gray-900 text-base">{s.ticker}</span>
-                            <span className="text-sm text-gray-600">
-                              {s.activeShares.toLocaleString()} sh @ {formatCurrency(s.avgBasis)} avg
-                              {s.assignedShares > 0 && <span className="ml-1 text-xs text-orange-600">({s.assignedShares} assigned)</span>}
-                            </span>
-                            <span className="text-sm font-medium">{priceDisplay}</span>
-                            {s.changePct != null && (
-                              <span className={`text-xs ${changeColor}`}>
-                                {s.changePct >= 0 ? "+" : ""}{s.changePct.toFixed(2)}% <span className="text-gray-400 font-normal">1d</span>
-                              </span>
+                            {s.coverage === "fully_assigned" ? (
+                              <span className="text-sm text-gray-500">no shares held — all called away</span>
+                            ) : (
+                              <>
+                                <span className="text-sm text-gray-600">
+                                  {s.activeShares.toLocaleString()} sh @ {formatCurrency(s.avgBasis)} avg
+                                  {s.assignedShares > 0 && <span className="ml-1 text-xs text-gray-400" title="Shares called away over the life of this ticker">· {s.assignedShares.toLocaleString()} called away to date</span>}
+                                </span>
+                                <span className="text-sm font-medium">{priceDisplay}</span>
+                                {s.changePct != null && (
+                                  <span className={`text-xs ${changeColor}`}>
+                                    {s.changePct >= 0 ? "+" : ""}{s.changePct.toFixed(2)}% <span className="text-gray-400 font-normal">1d</span>
+                                  </span>
+                                )}
+                              </>
                             )}
                           </div>
                           {statusNode}
@@ -823,11 +830,11 @@ return {
             )}
 
          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-              <StatCard icon={DollarSign} label={<Tip term="totalPremium">Total Premium</Tip>} value={formatCurrency(totalPremiumCollected)} sub="Net collected" color="text-green-700" />
-              <StatCard icon={DollarSign} label={<Tip term="realizedPnL">Realized P&L</Tip>} value={formatCurrency(realizedPnLTotal)} sub={realizedStockPnL.totalEstimatedRealized ? "Stock + premium · incl. estimate" : "Stock + premium"} color={realizedPnLTotal >= 0 ? "text-green-700" : "text-red-700"} />
+              <StatCard icon={DollarSign} label={<Tip term="totalPremium">Total Premium</Tip>} value={formatDollars(totalPremiumCollected)} sub="Net collected" color="text-green-700" />
+              <StatCard icon={DollarSign} label={<Tip term="realizedPnL">Realized P&L</Tip>} value={formatDollars(realizedPnLTotal)} sub={realizedStockPnL.totalEstimatedRealized ? "Stock + premium · incl. estimate" : "Stock + premium"} color={realizedPnLTotal >= 0 ? "text-green-700" : "text-red-700"} />
               <StatCard icon={Target} label={<Tip term="activeCalls">Active Calls</Tip>} value={activeCalls} sub={`${activePositions.length} positions`} />
               <StatCard icon={TrendingUp} label={<Tip term="allInReturn">All-In Return (Ann.)</Tip>} value={formatPct(allInReturn.pctNow)} sub={`Realized · ${formatPct(allInReturn.pctEver)} on capital ever deployed${realizedStockPnL.totalEstimatedRealized ? " · incl. estimate" : ""}`} color={realizedPnLTotal > 0 ? "text-green-700" : realizedPnLTotal < 0 ? "text-red-700" : "text-gray-900"} />
-              <StatCard icon={DollarSign} label={<Tip term="capitalDeployed">Capital Deployed</Tip>} value={formatCurrency(totalCapitalDeployed)} />
+              <StatCard icon={DollarSign} label={<Tip term="capitalDeployed">Capital Deployed</Tip>} value={formatDollars(totalCapitalDeployed)} />
             </div>
 
             <div className="grid lg:grid-cols-3 gap-6">
@@ -842,6 +849,9 @@ return {
                     <p className={`text-3xl font-bold mt-1 ${weeklyPL.premium > 0 ? "text-green-700" : weeklyPL.premium < 0 ? "text-red-600" : "text-gray-400"}`}>
                       {weeklyPL.premium !== 0 ? formatCurrency(weeklyPL.premium) : "$0"}
                     </p>
+                    {weeklyPL.pendingExpiring > 0 && (
+                      <p className="text-xs text-gray-500 mt-1">+ {formatDollars(weeklyPL.pendingExpiring)} pending on {weeklyPL.expiringCount} call{weeklyPL.expiringCount === 1 ? "" : "s"} expiring this week</p>
+                    )}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-gray-50 rounded-lg p-3 text-center">
@@ -977,9 +987,7 @@ return {
                   <Btn variant="ghost" size="sm" onClick={() => setShowAddEvent(true)}><Plus size={14} /></Btn>
                 </div>
                 <div className="divide-y divide-gray-50">
-                  {upcomingEvents.length === 0 ? (
-                    <div className="p-6 text-center text-gray-400 text-sm">No upcoming events.</div>
-                  ) : (
+                  {upcomingEvents.length === 0 ? null : (
                     upcomingEvents.map((e) => (
                       <div key={e.id} className="px-5 py-3 flex items-start gap-3">
                         <div className={`mt-0.5 p-1 rounded ${e.type === "earnings" ? "bg-orange-100" : e.type === "ex-div" ? "bg-purple-100" : "bg-blue-100"}`}>
@@ -1038,6 +1046,10 @@ return {
                         const expired = dte <= 0;
                         const mktPrice = livePrices[c.ticker] || c.currentPrice || null;
                         const distancePct = mktPrice && c.strike ? ((c.strike - mktPrice) / mktPrice) * 100 : null;
+                        const rActive = activePositions.filter(p => p.ticker.toUpperCase() === c.ticker.toUpperCase());
+                        const rShares = rActive.reduce((s, p) => s + p.shares, 0);
+                        const rBasis = rShares > 0 ? rActive.reduce((s, p) => s + p.costBasis * p.shares, 0) / rShares : null;
+                        const assignStockPnL = rBasis != null ? (c.strike - rBasis) * (c.contracts || 0) * 100 : null;
 
                         let riskLevel = "unknown";
                         let riskColor = "bg-gray-100 text-gray-500";
@@ -1072,6 +1084,11 @@ return {
                                   <span className="text-xs text-red-500">{Math.abs(distancePct).toFixed(1)}% ITM</span>
                                 )}
                               </div>
+                              {assignStockPnL !== null && (
+                                <p className={`text-xs mt-0.5 ${assignStockPnL >= 0 ? "text-green-600" : "text-red-500"}`}>
+                                  if assigned: {assignStockPnL >= 0 ? "+" : "\u2212"}{formatCurrency(Math.abs(assignStockPnL)).replace(".00", "")} on stock
+                                </p>
+                              )}
                             </td>
                             <td className="px-5 py-3">{c.expiration}</td>
                             <td className="px-5 py-3">{expired ? <span className="text-red-600 font-medium">Expired</span> : `${dte}d`}</td>
@@ -1299,7 +1316,7 @@ return {
                         const vs = w.volScore || 0;
                         const vsColor = vs >= 70 ? "bg-green-500" : vs >= 45 ? "bg-yellow-500" : "bg-red-400";
                         const vsLabel = vs >= 70 ? "High" : vs >= 45 ? "Moderate" : "Low";
-                        const vsLabelColor = vs >= 70 ? "text-green-700" : vs >= 45 ? "text-yellow-700" : "text-red-600";
+                        const vsLabelColor = vs >= 70 ? "text-green-700" : vs >= 45 ? "text-yellow-700" : "text-gray-500";
                         return (
                           <tr key={w.id} className={`border-b border-gray-50 hover:bg-gray-50 ${watchlistScoresLoading ? "opacity-50" : ""}`}>
                             <td className="px-4 py-3 font-bold text-gray-900">{w.ticker}</td>
@@ -1318,7 +1335,7 @@ return {
                             </td>
                             <td className="px-4 py-3">
                               {w.beta ? (
-                                <span className={`font-medium ${w.beta >= 1.5 ? "text-orange-600" : w.beta >= 1.0 ? "text-gray-900" : "text-blue-600"}`}>{w.beta}</span>
+                                <span className="font-medium text-gray-900">{w.beta}</span>
                               ) : "—"}
                             </td>
                             <td className="px-4 py-3">
@@ -1566,7 +1583,7 @@ return {
               </div>
             </Card>
            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-              <StatCard icon={DollarSign} label="Total Premium" value={formatCurrency(totalPremiumCollected)} color="text-green-700" />
+              <StatCard icon={DollarSign} label="Total Premium" value={formatDollars(totalPremiumCollected)} color="text-green-700" />
               <StatCard icon={TrendingUp} label={<Tip term="annualizedYield">Premium Yield (Ann.)</Tip>} value={formatPct(annualizedYield)} color="text-green-700" />
               <StatCard icon={BarChart3} label={<Tip term="totalTrades">Total Trades</Tip>} value={data.calls.length} />
               <StatCard icon={Target} label={<Tip term="winRate">Win Rate</Tip>} value={
@@ -1760,7 +1777,7 @@ return {
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-3">
                             <span className="text-lg font-bold text-gray-900">{c.ticker}</span>
-                            <span className="text-xs text-gray-400">{c.totalShares} shares · {c.daysHeld}d held · {c.tickerCalls.length} calls</span>
+                            <span className="text-xs text-gray-400">{c.totalShares.toLocaleString()} sh all-time · {c.daysHeld}d · {c.tickerCalls.length} calls</span>
                           </div>
                           {c.mktPrice && (
                             <span className="text-sm text-gray-500">Mkt: {formatCurrency(c.mktPrice)}</span>
@@ -1826,7 +1843,7 @@ return {
                           </div>
                           {c.alpha !== null && (
                             <div className={`rounded-lg p-2.5 text-center ${c.alpha >= 0 ? "bg-green-50" : "bg-red-50"}`}>
-                              <p className="text-xs text-gray-500">CC Alpha</p>
+                              <p className="text-xs text-gray-500">vs. Just Holding</p>
                               <p className={`text-sm font-bold ${c.alpha >= 0 ? "text-green-700" : "text-red-600"}`}>
                                 {c.alpha >= 0 ? "+" : ""}{formatCurrency(c.alpha)}
                               </p>
@@ -1916,10 +1933,9 @@ return {
       </div>
     </div>
     <h2 className="text-lg font-semibold text-gray-900">Tax Treatment</h2>
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <StatCard icon={Clock} label="Short-Term Gains" value={formatCurrency(taxData.filter(t => t.treatment === "Short-term" && t.net > 0).reduce((s, t) => s + t.net, 0))} color="text-orange-700" />
               <StatCard icon={Shield} label="Long-Term Gains" value={formatCurrency(taxData.filter(t => t.treatment === "Long-term" && t.net > 0).reduce((s, t) => s + t.net, 0))} color="text-green-700" />
-              <StatCard icon={AlertTriangle} label={<Tip term="washSale">Wash Sale Flags</Tip>} value={taxData.filter(t => t.washSaleRisk).length} sub="Review these" color={taxData.filter(t => t.washSaleRisk).length > 0 ? "text-red-600" : "text-gray-900"} />
             </div>
             <Card>
               <div className="overflow-x-auto">
@@ -1935,12 +1951,11 @@ return {
                         <th className="px-5 py-3">Days Held</th>
                         <th className="px-5 py-3">Treatment</th>
                         <th className="px-5 py-3">Net P/L</th>
-                        <th className="px-5 py-3"><Tip term="washSale">Wash Sale Risk</Tip></th>
                       </tr>
                     </thead>
                     <tbody>
                       {taxData.sort((a, b) => (b.dateClosed || "").localeCompare(a.dateClosed || "")).map((t) => (
-                        <tr key={t.id} className={`border-b border-gray-50 ${t.washSaleRisk ? "bg-red-50" : "hover:bg-gray-50"}`}>
+                        <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50">
                           <td className="px-5 py-3 font-semibold">{t.ticker}</td>
                           <td className="px-5 py-3">{t.dateOpened}</td>
                           <td className="px-5 py-3">{t.dateClosed}</td>
@@ -1951,9 +1966,6 @@ return {
                             </span>
                           </td>
                           <td className={`px-5 py-3 font-medium ${t.net >= 0 ? "text-green-700" : "text-red-600"}`}>{formatCurrency(t.net)}</td>
-                          <td className="px-5 py-3">
-                            {t.washSaleRisk ? <span className="text-red-600 font-medium flex items-center gap-1"><AlertTriangle size={14} /> Yes</span> : <span className="text-gray-400">No</span>}
-                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -3095,7 +3107,7 @@ function AddWatchlistForm({ onSubmit }) {
   const vs = preview?.volScore || 0;
   const vsColor = vs >= 70 ? "bg-green-500" : vs >= 45 ? "bg-yellow-500" : "bg-red-400";
   const vsLabel = vs >= 70 ? "High" : vs >= 45 ? "Moderate" : "Low";
-  const vsLabelColor = vs >= 70 ? "text-green-700" : vs >= 45 ? "text-yellow-700" : "text-red-600";
+  const vsLabelColor = vs >= 70 ? "text-green-700" : vs >= 45 ? "text-yellow-700" : "text-gray-500";
 
   return (
     <div className="space-y-4">
