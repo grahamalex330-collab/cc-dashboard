@@ -26,7 +26,7 @@ const GLOSSARY = {
   totalPremium: "Net premium income from all closed covered calls (gross premium minus any buy-to-close costs). Excludes premium on currently open calls until they resolve.",
   realizedPnL: "Total realized return on the strategy: premium income plus stock gains/losses on shares assigned via covered call. Does not include unrealized P&L on currently held positions.",
   activeCalls: "Number of covered calls currently open (not yet expired or assigned). Each contract covers 100 shares.",
-  capitalDeployed: "Cost basis of all currently active stock positions. Does not include cash, removed lots, or non-CC holdings.",
+  capitalDeployed: "Cost basis of the shares you currently hold. Shares called away by assignment drop out automatically \u2014 no manual lot cleanup needed. Does not include cash or non-CC holdings.",
   breakeven: "The stock price at which you neither make nor lose money on the combined position (shares + call). Equals your cost basis minus premium received.",
   assignmentRisk: "How likely your call is to be assigned, based on how close the price is to your strike. Assignment is not automatically bad: if the strike is above your cost basis, being assigned locks in a stock GAIN on top of the premium you kept. The line under the badge shows what assignment would mean in dollars.",
   capitalUtilization: "What percentage of your stock positions currently have calls written against them. Higher = more income generation. 100% means every position is covered.",
@@ -459,10 +459,11 @@ export default function CoveredCallDashboard() {
   const closedCalls = data.calls.filter((c) => c.status !== "open");
   const totalPremiumCollected = data.calls.reduce((sum, c) => { const prem = grossPrem(c); if (c.status === "closed") return sum + prem - closeCostOf(c); if (c.status === "open") return sum; return sum + prem; }, 0);
   const totalCapitalEverDeployed = allPositionsEver.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
-  const totalCapitalDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * p.shares, 0);
+  // Net of assignment: shares already called away drop out automatically, even before lot maintenance.
+  const totalCapitalDeployed = activePositions.reduce((sum, p) => sum + p.costBasis * Math.max(0, p.shares - assignmentForPosition(p, allPositionsEver, data.calls).shares), 0);
   const realizedStockPnL = computeRealizedStockPnL(allPositionsEver, data.calls);
   const realizedPnLTotal = totalPremiumCollected + realizedStockPnL.totalRealized;
-  const totalUnrealized = activePositions.reduce((sum, p) => { const px = livePrices[p.ticker.toUpperCase()]; return px != null ? sum + (px - p.costBasis) * p.shares : sum; }, 0);
+  const totalUnrealized = activePositions.reduce((sum, p) => { const px = livePrices[p.ticker.toUpperCase()]; const sh = Math.max(0, p.shares - assignmentForPosition(p, allPositionsEver, data.calls).shares); return px != null ? sum + (px - p.costBasis) * sh : sum; }, 0);
   const assignmentRate = computeAssignmentRate(data.calls);
   const activeCalls = openCalls.length;
   const upcomingEvents = data.events.filter((e) => new Date(e.date) >= new Date(today())).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 8);
